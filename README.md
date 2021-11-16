@@ -1,62 +1,113 @@
-# Final Project
+This document (`README_template.md`) provides a template for your **final** documentation (**NOT YOUR PROPOSAL**).
 
-- This repo is where you will store **all** of your documents for the course project.
-- Please see [PROPOSAL.md](PROPOSAL.md) for a template for your **proposal**.
+- Your final document should be named simply `README.md`.  
+- I've left several comments below.  These should obviously be removed from your document.
+- You may add additional sections as you see fit, but you should not **remove** any of the sections defined below.
+- Any supplementary images should go in a directory called `Images`.  See [README.md](README.md) for more information about the required directory structure.
+- Please keep in mind that the audience for this document should be students in the Fall 2022 section of this class.  (In other words, write this such that 3-month-younger you would've been able to utilize this document.)
 
---- 
+---
 
-## IMPORTANT DATES:
-- **Thursday, Nov. 4** -- Proposal presentations in class.
-- **Tuesday, Nov. 23** -- Progress Report.  Each team will present the status of their project via Zoom that day, using the [PROPOSAL.md](PROPOSAL.md) template.  
-- **Thursday, Dec. 9** -- Your **almost** final documentation, code, and presentation materials are due.  You'll be asked to give a brief presentation in class.  I'll give you feedback.
-- **Exact Date to-be-determined** -- **Final** project presentations.  We'll either do these in class, or you'll produce a YouTube video.  We'll discuss in early December.
-- **Wednesday, Dec. 15, Noon** -- Your complete project materials are due.
+# [Provide a Brief Descriptive Project Title Here]
+
+Project Name: [provide catkin_ws name here].  
+*For example, `followbot`, `wanderbot`, and `redball` are project names we've used in class.  When I install your code, I want to know where I'll find it in `~/catkin_ws/src/`*
+
+Team Members:
+- [Member 1, email]
+- [Member 2, email]
+
+---
+
+## Project Description
+
+*In this section, describe what your project does. This should be descriptive.  Someone from next year's class should be able to fully understand the aims and scope of your project. I highly recommend using pictures to help explain things.  Maybe even post a YouTube video showing your code in action.*
+
+*NOTE:  This is not a proposal.  This is a final report describing your actual completed project.*
+
+
+
+### Contributions
+
+*In this subsection, I want to know what is new/unique/interesting about your project.*
+
+---
+
+## Installation Instructions
+
+*In this section you should provide instructions for someone else to install all of the code necessary to execute your project.
+Your target audience should be a student from the Fall 2020 class.
+You may assume that the student has ROS Indigo installed on Ubuntu 14.04.*
+
+List of Prerequisite Software:
+- [software 1] 
+- [software 2]
+- [etc.]
+*This is just a list, not installation instructions.  The idea is to provide a summary of the additional software/packages that need to be installed.  Instructions go below.*
+
+
+*Now, provide detailed step-by-step instructions to install all necessary software for your project.*
+
+*The expectation is that the user should only have to follow these steps one time.  For example, if your project requires generating Gazebo mazes, the task of INSTALLING the maze generation code should go in this section.*
+
+---
+
+## Running the Code
+
+*Provide detailed step-by-step instructions to run your code.*
+
+*NOTE 1:  At this point, the user should have already installed the necessary code.  This section should simply describe the steps for RUNNING your project.*  
+
+*NOTE 2:  If you're generating mazes, for example, the task of GENERATING a new maze would go here.*
+
+---
+
+## Measures of Success
+
+*You have already defined these measures of success (MoS) in your proposal, and updated them after your progress report.  The purpose of this section is to highlight how well you did.  Also, these MoS will be useful in assigning partial credit.*
+
+*The MoS summary should be in table form.  A sample is provided below:*
+<TABLE>
+<TR>
+	<TH>Measure of Success (from your PROPOSAL)</TH>
+	<TH>Status (completion percentage)</TH>
+</TR>
+<TR>
+	<TD>Install PR2 ROS Indigo Package</TD>
+	<TD>100%</TD>
+</TR>
+<TR>
+	<TD>Write brain reader software to move the robot</TD>
+	<TD>25% (brain reader software detects brain waves, but does not translate to ROS commands.)</TD>
+</TR>
+</TABLE>
+
+*NOTE 1:  I have your proposals...don't move the goal posts!*
+
+*NOTE 2:  For activities less than 100% complete, you should differentiate between what you completed and what you were unable to complete. I suggest you add details in a bullet list below.* 
 
 
 ---
 
-## Organizing your Repository
-For consistency, please use the directory structure described below, where `projectname` should be replaced with the actual catkin_ws name of your project.
-	
-```
-PROPOSAL.md
-README.md
-Images/	
-code/projectname/	
-	scripts/
-	msg/
-	srv/
-	CMakeLists.txt
-	package.xml
-```		
+## What did you learn from this project?
 
-- A sample README file [may be found here](README_template.md)
-- `Images/` is a directory (folder) for storing the graphics for your README.
-- `code/projectname/` is a directory for your ROS code.  Replace `projectname` with the name of your catkin package.
-	- Within this directory you should have `CMakeLists.txt`, `package.xml`, a `scripts/` directory, most likely a `msg/` directory, and possibly a `srv/` directory (if your project uses services).  
-- See `06_Followbot` for an example of the directory structure.
+*For example, what concepts from class do you now have a solid understanding of?  What new techniques did you learn?*
 
+*Also, what challenges did you face, and how did you overcome these?  Be specific.*
 
 ---
 
-## Project Grading
+## Future Work
 
-Grades for the final project will be based on the following percentages and content:
+*If a student from next year's class wants to build upon your project, what would you suggest they do?  What suggestions do you have to help get them started (e.g., are there particular Websites they should check out?).*
 
-- Proposal (15%)
-- Progress Report (10%)
-- Final Documentation and Code (50%)
-	- Did you address issues from the presentation feedback?
-	- How did you do on the "measures of success"?
-	- Can the instructor successfully install the prereqs?
-	- Can the instructor successfully run the code?  (I highly recommend that you find someone to test this for you)
-	- Does the code do what it's supposed to?
-- Project Demonstration (25%)
-	- Did you prepare/rehearse for this presentation?
-	- Is the README neatly formatted?
-	- Is the README (nearly) complete?
-	- Was the code submitted/organized properly?  Are filenames correct?  Code in the proper directories/subdirectories?
-	- Are the installation instructions complete?
-	- Are the instructions for running the code complete?
-	- Were you able to answer technical questions about your project?
-	- How well were you able to demonstrate the actual implementation?  Note: You have until Friday, Dec. 13 to finalize the project.
+---
+
+## References/Resources
+
+*What resources did you use to help finish this project?*
+- Include links to Websites.  Explain what this Website enabled you to accomplish.
+- Include references to particular chapters/pages from the ROS book.  Why was each chapter necessary/helpful?
+
+
+
