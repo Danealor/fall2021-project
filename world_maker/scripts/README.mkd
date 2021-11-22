@@ -1,0 +1,13 @@
+# Spawning the maze world
+
+1) CD to the world_maker scripts folder (cd ~/catkin_ws/src/world_maker/scripts)
+
+2) Save the most up to date `custom_world_coords.xls` as a text CSV file (`custom_world_coords.csv`) - DO NOT change the name of the CSV file
+
+3) Run the `create_world.py` script (python3 create_world.py)
+
+4) Launch the Gazebo world associated with the world_maker package (roslaunch world_maker_custom_world.launch)
+
+5) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xls`
+
+6) To change the color of the blocks, open the `create_world.py` script and update line 167 with a color name (Ex: Gray)
