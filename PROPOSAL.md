@@ -33,12 +33,12 @@ In order to complete this project we intend to make use of the available resourc
 
 
 ## Measures of Success
-- [ ] View both robot models in Gazebo.
+- [ ] View both robot models in Gazebo
 - [ ] Demonstrate that the quadcopter stays in close proximity to the maze
 - [ ] Demonstrate that the quadcopter completes passes of the maze to develop an image
 - [ ] Demonstrate that the rover receives information from the quadcopter and moves
 - [ ] Demonstrate that the rover can successfully complete a maze
 - [ ] Implement code on a real COEX quadcopter
-- [ ] Have a classmate follow the steps in the README to successfully run the simulation without any help.
+- [ ] Have a classmate follow the steps in the README to successfully run the simulation without any help
 
 
