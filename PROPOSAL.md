@@ -20,9 +20,9 @@ In order to complete this project we intend to make use of the available resourc
 
 ## Milestones/Schedule Checklist
 - [x] Complete this proposal document.  *TC, Due Nov. 23* 
-- [x] Clone and familiarize ourselves with the COEX clover simulation scripts * AB, Due Nov. 2*
-- [x] Clone and repair the maze building code from Github * TC, Due Nov 20* 
-- [x] Develop a maze in Gazebo to be solved  * TC, Due Nov. 23*
+- [x] Clone and familiarize ourselves with the COEX clover simulation scripts *AB, Due Nov. 2*
+- [x] Clone and repair the maze building code from Github *TC, Due Nov 20* 
+- [x] Develop a maze in Gazebo to be solved  *TC, Due Nov. 23*
 - [x] Develop edge following algorithm to keep the quadcopter within range of the maze *AB, Due Nov. 23*
 - [ ] Create a .launch file that includes the maze, boundaries, and both robots *TC, Due Nov. 25*
 - [ ] Implement maze mapping algorithm and ROS services network for transferring maze solution to rover *AB, Due Nov. 28*
