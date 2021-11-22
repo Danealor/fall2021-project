@@ -24,7 +24,7 @@ In order to complete this project we intend to make use of the available resourc
 - [x] Clone and repair the maze building code from Github * TC, Due Nov 20* 
 - [x] Develop a maze in Gazebo to be solved  * TC, Due Nov. 23*
 - [x] Develop edge following algorithm to keep the quadcopter within range of the maze *AB, Due Nov. 23*
-- [x] Create a .launch file that includes the maze, boundaries, and both robots *TC, Due Nov. 25*
+- [ ] Create a .launch file that includes the maze, boundaries, and both robots *TC, Due Nov. 25*
 - [ ] Implement maze mapping algorithm and ROS services network for transferring maze solution to rover *AB, Due Nov. 28*
 - [ ] Develop rover follower algorithm from provided maze solution *TC, Due Nov. 30*
 - [ ] Test both robots in simulation and troubleshoot as necessary *Due Dec. 2*
