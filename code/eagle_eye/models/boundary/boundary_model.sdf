@@ -7,7 +7,7 @@
             <visual name="boundary_vis">
                 <geometry>
                     <box>
-                        <size>10 10 1e-3</size>
+                        <size>25 25 1e-3</size>
                     </box>
                 </geometry>
                 <material>
