@@ -1,16 +1,36 @@
-<?xml version="1.0"?>
-<package>
-  <name>followbot</name>
-  <version>0.0.0</version>
-  <description>The followbot package</description>
-  <maintainer email="morgan@osrfoundation.org">Morgan Quigley</maintainer>
-  <license>BSD</license>
-  <author email="morgan@osrfoundation.org">Morgan Quigley</author>
-  <buildtool_depend>catkin</buildtool_depend>
-  <build_depend>rospy</build_depend>
-  <run_depend>rospy</run_depend>
-  <run_depend>gazebo_ros</run_depend>
-  <export>
-    <gazebo_ros gazebo_media_path="${prefix}"/>
-  </export>
+<package format="2">
+    <name>eagle_eye</name>
+    <version>0.0.0</version>
+    <description>UB IE482/582 project where a drone helps a ground robot navigate an obstacle-rich environment.</description>
+
+    <!-- One maintainer tag required, multiple allowed, one person per tag --> 
+    <maintainer email="amitblon@buffalo.edu">Amit Blonder</maintainer>
+
+    <!-- Author tags are optional, mutiple are allowed, one per tag -->
+    <!-- Authors do not have to be maintianers, but could be -->
+    <author email="amitblon@buffalo.edu">Amit Blonder</author>
+    <author email="ajcostan@buffalo.edu">Tony Costanzo</author>
+
+    <!-- One license tag required, multiple allowed, one license per tag -->
+    <!-- Commonly used license strings: -->
+    <!--   BSD, MIT, Boost Software License, GPLv2, GPLv3, LGPLv2.1, LGPLv3 -->
+    <license>MIT</license>
+
+    <!-- Url tags are optional, but mutiple are allowed, one per tag -->
+    <!-- Optional attribute type can be: website, bugtracker, or repository -->
+    <url type="website">https://github.com/Danealor/fall2021-project</url>
+    <url type="bugtracker">https://github.com/Danealor/fall2021-project/issues</url>
+    
+    <!-- The *_depend tags are used to specify dependencies -->
+    <!-- Dependencies can be catkin packages or system dependencies -->
+    <buildtool_depend>catkin</buildtool_depend>
+    <depend>rospy</depend>
+    <depend>gazebo_ros</depend>
+    <depend>clover_simulation</depend>
+
+    <export>
+        <gazebo_ros gazebo_media_path="${prefix}"/>
+        <gazebo_ros gazebo_model_path="${prefix}/models"/>
+        <gazebo_ros gazebo_resource_path="${prefix}/resources"/>
+    </export>
 </package>

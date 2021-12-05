@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<sdf version="1.5">
+    <model name="boundary">
+        <pose>1 2.3 0.0 0 0 0</pose>
+        <static>True</static>
+        <link name="boundary_link">
+            <visual name="boundary_vis">
+                <geometry>
+                    <box>
+                        <size>25 25 1e-3</size>
+                    </box>
+                </geometry>
+                <material>
+                    <script>
+                        <uri>model://boundary/materials/scripts</uri>
+                        <uri>model://boundary/materials/textures</uri>
+                        <name>boundary</name>
+                    </script>
+                </material>
+            </visual>
+        </link>
+    </model>
+</sdf>
