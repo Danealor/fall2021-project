@@ -10,11 +10,11 @@
 - `cp custom_world_coords.csv custom_world_coords_BACKUP.csv`
 - `cp custom_world.world custom_world_BACKUP.worlds`
 
-  If you would like to randomize the maze after that, run `python3 randomizer.py`.
+  If you would like to randomize the maze after that, run `python3 randomizer.py`
 
 3) Save the most up to date `custom_world_coords.xlsx` as a text CSV file (`custom_world_coords.csv`) - DO NOT change the name of the CSV file
 
-4) Run `python3 create_world.py` script
+4) Run `python3 create_world.py`
 
 5) Launch the Gazebo world associated with the world_maker package (`roslaunch world_maker custom_world.launch`)
 
