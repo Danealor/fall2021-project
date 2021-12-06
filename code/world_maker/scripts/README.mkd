@@ -8,7 +8,7 @@
 
 4) Run the `create_world.py` script (python3 create_world.py)
 
-5) Launch the Gazebo world associated with the world_maker package (`roslaunch world_maker_custom_world.launch`)
+5) Launch the Gazebo world associated with the world_maker package (`roslaunch world_maker custom_world.launch`)
 
 6) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xls`
 
