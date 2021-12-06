@@ -14,7 +14,7 @@
 
 3) Save the most up to date `custom_world_coords.xlsx` as a text CSV file (`custom_world_coords.csv`) - DO NOT change the name of the CSV file
 
-4) Run the `create_world.py` script (python3 create_world.py)
+4) Run the `create_world.py` script
 
 5) Launch the Gazebo world associated with the world_maker package (`roslaunch world_maker custom_world.launch`)
 
