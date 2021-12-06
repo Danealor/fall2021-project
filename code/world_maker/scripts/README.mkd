@@ -4,13 +4,13 @@
 
 2) OPTIONAL: 
 
-Make a copy of the world files first by running the following terminal commands:
+  Make a copy of the world files first by running the following terminal commands:
 
 - `cp custom_world_coords.xls custom_world_coords_BACKUP.xls`
 - `cp custom_world_coords.csv custom_world_coords_BACKUP.csv`
 - `cp custom_world.world custom_world_BACKUP.worlds`
 
-If you would like to randomize the maze after that, run `python3 randomizer.py`.
+  If you would like to randomize the maze after that, run `python3 randomizer.py`.
 
 3) Save the most up to date `custom_world_coords.xlsx` as a text CSV file (`custom_world_coords.csv`) - DO NOT change the name of the CSV file
 
