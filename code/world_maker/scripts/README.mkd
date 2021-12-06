@@ -18,6 +18,6 @@
 
 5) Launch the Gazebo world associated with the world_maker package (`roslaunch world_maker custom_world.launch`)
 
-6) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xls`
+6) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xlsx`
 
 7) To change the color of the blocks, open the `create_world.py` script and update line 167 with a color name (Ex: Gray)
