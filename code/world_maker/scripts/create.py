@@ -114,8 +114,8 @@ stateOpening = """
 """
 
 modelTemplate = """
-    <model name='unit_box_%s'>
-      <pose>%d %d 0 0 -0 0</pose>
+    <model name='unit_box_{i}'>
+      <pose>{x:f} {y:f} 0 0 -0 0</pose>
       <link name='link'>
         <inertial>
           <mass>1</mass>
@@ -131,7 +131,7 @@ modelTemplate = """
         <collision name='collision'>
           <geometry>
             <box>
-              <size>1 1 1</size>
+              <size>{lx:f} {ly:f} {h:f}</size>
             </box>
           </geometry>
           <max_contacts>10</max_contacts>
@@ -148,7 +148,7 @@ modelTemplate = """
         <visual name='visual'>
           <geometry>
             <box>
-              <size>1 1 1</size>
+              <size>{lx:f} {ly:f} {h:f}</size>
             </box>
           </geometry>
           <material>
@@ -171,10 +171,10 @@ modelTemplate = """
 """
 
 stateTemplate = """
-      <model name='unit_box_%s'>
-        <pose>%d %d 0 0 -0 0</pose>
+      <model name='unit_box_{i}'>
+        <pose>{x:f} {y:f} 0 0 -0 0</pose>
         <link name='link'>
-          <pose>%d %d 0 0 -0 0</pose>
+          <pose>{x:f} {y:f} 0 0 -0 0</pose>
           <velocity>0 0 0 0 -0 0</velocity>
           <acceleration>0 0 0 0 -0 0</acceleration>
           <wrench>0 0 0 0 -0 0</wrench>
@@ -237,7 +237,7 @@ def read_buildfile(filename):
     return buildfile
 
 
-def write_world(filename, myCoords, buildfile=None):	
+def write_world(filename, myCoords, resolution, height, buildfile=None):	
     # Open the outfile for writing:
     outFile = open(filename, 'w')
 
@@ -248,7 +248,8 @@ def write_world(filename, myCoords, buildfile=None):
 
     # Create a model for each unit obstacle on the map:
     for i in myCoords:
-        thisString = modelTemplate % (str(i), myCoords[i].x, myCoords[i].y)
+        thisString = modelTemplate.format(i=i, x=myCoords[i].x * resolution, y=myCoords[i].y * resolution,
+                                               lx=resolution, ly=resolution, h=height)
         outFile.write(thisString)
 
     if buildfile is not None:
@@ -258,7 +259,7 @@ def write_world(filename, myCoords, buildfile=None):
 
     # Create a state for each model:
     for i in myCoords:
-        thisString = stateTemplate % (str(i), myCoords[i].x, myCoords[i].y, myCoords[i].x, myCoords[i].y)
+        thisString = stateTemplate.format(i=i, x=myCoords[i].x * resolution, y=myCoords[i].y * resolution)
         outFile.write(thisString)
 
     if buildfile is not None:
@@ -277,12 +278,16 @@ if __name__ == '__main__':
   parser.add_argument('outfile', help='Output .world file to create')
   parser.add_argument('-b', '--build-on', dest='buildfile',
     help='Another .world file to build on top of, instead of creating a new one.')
+  parser.add_argument('-r', '--resolution', dest='resolution', type=float, default=1.0,
+    help='Resolution of cell locations and sizes in meters.')
+  parser.add_argument('-H', '--height', dest='height', type=float, default=1.0,
+    help='Block height in meters.')
   args = parser.parse_args()
 
   myCoords = read_coords(args.infile)
   buildfile = None
   if args.buildfile:
       buildfile = read_buildfile(args.buildfile)
-  write_world(args.outfile, myCoords, buildfile)
+  write_world(args.outfile, myCoords, args.resolution, args.height, buildfile)
 
   print(f"The file '{args.outfile}' has been generated.")

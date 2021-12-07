@@ -7,7 +7,6 @@ import rospy
 from rospy.impl.tcpros import get_tcpros_handler
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import Vector3Stamped
 import clover.srv
 
 import cv2, numpy as np
@@ -95,7 +94,7 @@ def xy_to_idx(xy):
     return ((xy - (0, HEIGHT)) * (1,-1))[...,::-1]
     
 def to_cv(idx):
-    return np.round(idx[...,::-1]).astype(int).clip(-99999, 99999)
+    return np.round(idx[...,::-1]).astype(int).clip(-9999, 9999)
 
 def turn_left(xy):
     x, y = np.moveaxis(xy, -1 , 0)
@@ -223,7 +222,7 @@ def strided_indexing_roll(a, r):
 
     # Get sliding windows; use advanced-indexing to select appropriate ones
     n = a.shape[-1]
-    arr_ret = viewW(a_ext,n,axis=-1)[(*np.indices(r.shape)), (n-r)%n]
+    arr_ret = viewW(a_ext,n,axis=-1)[list(*np.indices(r.shape)), (n-r)%n]
 
     # Roll and apply mask too
     if np.ma.isMA(a):
@@ -246,7 +245,8 @@ def initialize_data(img1, img2):
     data = {'images': [{'img': img1}, {'img': img2}]}
 
     for d in data['images']:
-        d['filt'] = d['img'].astype(np.int8)
+        d['mask'] = np.sum(d['img'], axis=-1) > 0
+        d['filt'] = d['mask'].astype(np.int8)
 
         d['axis'] = [{'name': 'y'}, {'name': 'x'}]
         for ax, a in enumerate(d['axis']):
@@ -268,8 +268,6 @@ def initialize_data(img1, img2):
 
                 # Convert to masked array
                 dr['indices'] = np.ma.masked_where(np.arange(dr['maxcount']) >= dr['count'][:,None], dr['indices'], copy=False)
-
-    return data
 
 def estimate_translation(data):
     d1, d2 = data['images']
@@ -347,94 +345,6 @@ def estimate_translation(data):
 
     return translation, loss
 
-from sklearn.linear_model import RANSACRegressor
-from sklearn.base import BaseEstimator
-
-class DiagEstimator(BaseEstimator):
-    def __init__(self, translation=0):
-        self.translation = translation
-    
-    def fit(self, X, y):
-        loss, self.translation = to_diag(y - X[:,0])
-
-    def predict(self, X):
-        return X[:,0] + self.translation
-
-    def score(self, X, y):
-        y_true = y
-        y_pred = self.predict(X)
-        u = ((y_true - y_pred) ** 2).sum()
-        loss = u / np.sqrt(len(y_pred))
-        score = -np.log(1 + loss)
-        return score
-
-ransac = RANSACRegressor(base_estimator=DiagEstimator(), min_samples=1)
-def estimate_translation_guess(data, guess):
-    try:
-        d1, d2 = data['images']
-        data['axis'] = [{'name': 'y'}, {'name': 'x'}]
-        for a, a1, a2, offs, guess_ax in zip(data['axis'], d1['axis'], d2['axis'], guess, guess[::-1]):
-            a['dir'] = [{'dir': 1}, {'dir': -1}]
-            for dr, dr1, dr2 in zip(a['dir'], a1['dir'], a2['dir']):
-                # Prepare offset ranges
-                range1 = np.array([0, len(dr1['indices'])])
-                range2 = range1 + offs
-                ranges = np.stack([range1, range2])
-                ranges[:,0] += max(0, -ranges[1,0])
-                ranges[:,1] -= max(0, ranges[1,1]-len(dr2['indices']))
-                
-                start1, end1 = ranges[0]
-                start2, end2 = ranges[1]
-                
-                if start1 == end1:
-                    return guess, -np.inf # Too far away!
-
-                counts = np.stack([dr1['count'][start1:end1], dr2['count'][start2:end2]])
-                mincounts = np.min(counts, axis=0)
-                numdims = np.min(np.max(counts, axis=-1))
-                if numdims == 0:
-                    return guess, -np.inf # No features found!
-
-                pts1 = dr1['indices'][start1:end1]
-                pts2 = dr2['indices'][start2:end2]
-
-                def rollback(ptsX, countX):
-                    ptsX_shape = mincounts.shape + (ptsX.shape[-1],)
-                    roll = mincounts - countX
-                    return strided_indexing_roll(np.broadcast_to(ptsX, ptsX_shape), roll)
-
-                if guess_ax < 0:
-                    # If we guess negative in this axis, then rollback pts1 to match (we might have unmatched entries at start of pts1)
-                    pts1 = rollback(pts1, counts[0])
-                else:
-                    pts2 = rollback(pts2, counts[1])
-                    
-                dr['pts'] = pts2[...,:numdims] - pts1[...,:numdims]
-
-            # Combine rising and falling into one test
-            a['pts'] = np.ma.concatenate([dr['pts'] for dr in a['dir']], axis=-1)
-
-            y = a['pts'][~a['pts'].mask].reshape(-1)
-            X0 = np.zeros_like(y)[:,None]
-            ransac.fit(X0, y)
-            a['dist'] = ransac.predict(np.array([[0]]))[0]
-            a['score'] = ransac.score(X0, y)
-
-        translation = np.array([a['dist'] for a in data['axis']][::-1])
-        score = np.sum([a['score'] for a in data['axis']])
-        return translation, score
-    except:
-        # Computation error
-        return guess, -np.inf
-
-def estimate_translation_iterative(data, guess, reps, stop_dist=3):
-    for _ in range(reps):
-        solution, score = estimate_translation_guess(data, np.round(guess).astype(int))
-        if np.linalg.norm(solution - guess) < stop_dist:
-            break
-        guess = solution
-    return solution, score
-
 def draw_stitched(img1, img2, translation):
     centers = np.array([translation, (0,0)])
     sizes = np.array([img1.shape, img2.shape])[:,1::-1]
@@ -456,165 +366,7 @@ def draw_stitched(img1, img2, translation):
         np.putmask(view, mask_broad, img)
     
     return img_combined
-
-
-### Mapping ###
-
-class Map(object):
-
-    def __init__(self, 
-        init_cols=100, init_rows=100, 
-        init_shift_x=0., init_shift_y=0.,
-        val_range=10, val_clip=5):
-
-        self.matrix = np.zeros((init_rows, init_cols), dtype=np.int8)
-
-        # Height is negative because we flip vertically
-        self.cell_dims = np.array([1.0, -1.0], dtype=float)
-
-        self.shift = np.array([init_shift_x, init_shift_y], dtype=float)
-        self.range, self.clip = val_range, val_clip
-
-    def index(self, coords):
-        "Return row,col indices from x,y coordinates."
-        idx = ((coords - self.shift) // self.cell_dims).astype(int) # (x,y) => (j,i)
-        return idx[...,::-1] # (j,i) => (i,j)
-
-    _corner_tf = np.array([[0,1],[0,0],[1,1],[1,0]])
-    def corners(self, idx):
-        "Return list of x,y coordinates of the corners of the cells at index i,j"
-         # (i,j) => (j,i) => (x,y)
-        origin = idx[...,::-1] * self.cell_dims + self.shift
-        corner_offsets = self.cell_dims * self._corner_tf
-
-        return origin[...,None,:] +  corner_offsets # Expand to (..., 4, 2)
-
-    def centers(self, idx):
-        "Return list of x,y coordinates of the centers of the cells at index i,j"
-         # (i,j) => (j,i) => (x,y)
-        origin = idx[...,::-1] * self.cell_dims + self.shift
-        center_offset = self.cell_dims * [0.5,0.5]
-
-        return origin + center_offset
-
-    def validate_entry(self, idx):
-        "Check if the indices are within the matrix and expand if necessary, returning new indices."
-        if not idx.size:
-            return idx # No elements
-        
-        min_idx = np.min(idx, axis=-2)
-        max_idx = np.max(idx, axis=-2)
-        transform = np.zeros_like(self.matrix.shape)
-
-        while (min_idx + transform)[0] < 0:
-            # Expand up
-            transform[0] += self.matrix.shape[0]
-            g = np.zeros_like(self.matrix)
-            self.matrix = np.concatenate([g, self.matrix], axis=0)
-        while (max_idx + transform)[0] >= self.matrix.shape[0]:
-            # Expand down
-            g = np.zeros_like(self.matrix)
-            self.matrix = np.concatenate([self.matrix, g], axis=0)
-        while (min_idx + transform)[1] < 0:
-            # Expand left
-            transform[1] += self.matrix.shape[1]
-            g = np.zeros_like(self.matrix)
-            self.matrix = np.concatenate([g, self.matrix], axis=1)
-        while (max_idx + transform)[1] >= self.matrix.shape[1]:
-            # Expand right
-            g = np.zeros_like(self.matrix)
-            self.matrix = np.concatenate([self.matrix, g], axis=1)
-
-        # Update shift (i,j) => (j,i) => (x,y)
-        self.shift -= transform[::-1] * self.cell_dims
-
-        # Update indices
-        idx += transform
-
-        return idx
-
-    def __getitem__(self, key):
-        idx = self.index(key) # (x,y) => (i,j)
-
-        # Find invalid entries
-        invalid = np.max((idx < 0) | (idx >= self.matrix.shape), axis=-1)
-
-        # Zero out the invalid indices
-        idx[invalid] = (0, 0)
-
-        return np.where(invalid, self._default_val, self.matrix[idx[...,0], idx[...,1]])
-
-    def __setitem__(self, key, value):
-        idx = self.index(key) # (x,y) => (i,j)
-        idx = self.validate_entry(idx)
-        self.matrix[idx[...,0], idx[...,1]] = value
-
-    def add(self, img, center):
-        assert(img.dtype == bool)
-        img_change = img.astype(np.int8) * 2 - 1
-        img_size = np.array(img.shape[1::-1])
-
-        topleft = center + (img_size / 2) * (-1, 1)
-        topleft_idx = self.index(topleft)
-        botright_idx = topleft_idx + img.shape[:2]
-        start_idx, end_idx = self.validate_entry(np.array([topleft_idx, botright_idx]))
-
-        map_range = self.matrix[start_idx[0]:end_idx[0], start_idx[1]:end_idx[1]]
-        map_range += img_change
-        map_range.clip(-self.range, self.range, out=map_range)
-
-        return start_idx, end_idx
-
-    def extents(self):
-        "Returns [[xmin, xmax], [ymin, ymax]]"
-        start = self.shift
-        end = self.matrix.shape[::-1] * self.cell_dims + self.shift
-        corners = np.stack([start, end])
-        botleft = np.min(corners, axis=0)
-        topright = np.max(corners, axis=0)
-        extent = np.stack([botleft, topright],axis=1)
-        return extent
-
-    def plot(self, grid=True, **kwargs):
-        "Shows a pyplot of the grid"
-        fig, ax = plt.subplots()
-        ax.imshow(self.matrix, extent=list(self.extents().flat), **kwargs)
-        ax.xaxis.set_minor_locator(plt.MultipleLocator(abs(self.cell_dims[0])))
-        ax.yaxis.set_minor_locator(plt.MultipleLocator(abs(self.cell_dims[1])))
-        if grid:
-            ax.grid(True,which='both',linestyle='-',linewidth=1)
-
-    def to_preview_image(self):
-        "Converts matrix to BGR image for previewing"
-        below = self.matrix.clip(-self.clip, 0) / -self.clip
-        above = self.matrix.clip(0, self.clip) / self.clip
-
-        blue = below + above
-        red = above
-        green = above
-
-        return (np.stack([blue, green, red], axis=-1) * 255).astype(np.uint8)
     
-def draw_corners(img, start_idx, end_idx, color=(0,0,0)):
-    topleft = np.array((start_idx[0], start_idx[1]))
-    topright = np.array((start_idx[0], end_idx[1]))
-    botleft = np.array((end_idx[0], start_idx[1]))
-    botright = np.array((end_idx[0], end_idx[1]))
-
-    size = end_idx - start_idx
-    lengths = size / 5
-
-    cv2.line(img, to_cv(topleft), to_cv(topleft + lengths * (0,1)), color, thickness=2) 
-    cv2.line(img, to_cv(topleft), to_cv(topleft + lengths * (1,0)), color, thickness=2)
-
-    cv2.line(img, to_cv(topright), to_cv(topright + lengths * (0,-1)), color, thickness=2) 
-    cv2.line(img, to_cv(topright), to_cv(topright + lengths * (1,0)), color, thickness=2)
-
-    cv2.line(img, to_cv(botleft), to_cv(botleft + lengths * (0,1)), color, thickness=2) 
-    cv2.line(img, to_cv(botleft), to_cv(botleft + lengths * (-1,0)), color, thickness=2)
-
-    cv2.line(img, to_cv(botright), to_cv(botright + lengths * (0,-1)), color, thickness=2) 
-    cv2.line(img, to_cv(botright), to_cv(botright + lengths * (-1,0)), color, thickness=2)
 
 ### Control Logic ###
 
@@ -640,15 +392,10 @@ class Driver(object):
         self.camera_initialized = False
         self.bridge = CvBridge()
         self.filter_red = Filter(**RED_FILTER)
-        self.filter_yellow = Filter(**YELLOW_FILTER)
-        self.flow_pos = np.zeros(2)
-        self.img_flow_pos = None
-        self.last_img_flow_pos = None
+        #self.stitcher = cv2.Stitcher_create(mode=cv2.STITCHER_SCANS)
+        self.stitcher = cv2.Stitcher_create(mode=cv2.STITCHER_PANORAMA)
         self.img_map = None
-        self.img_last = None
         self.imgs_collected = []
-        self.shown = False
-        self.map = Map()
 
     def register(self):
         self.get_telemetry = rospy.ServiceProxy('get_telemetry', clover.srv.GetTelemetry)
@@ -676,9 +423,6 @@ class Driver(object):
 
         self.caminfo_sub = rospy.Subscriber('/main_camera/camera_info', 
                                           CameraInfo, self.caminfo_callback)
-
-        self.oflow_sub = rospy.Subscriber('/optical_flow/shift',
-                                          Vector3Stamped, self.oflow_callback)
 
         rospy.on_shutdown(self.shutdown)
 
@@ -719,13 +463,13 @@ class Driver(object):
             self.state = 'find_edge'
 
     def state_find_edge(self):
-        if self.img_msg is None or not self.camera_initialized:
+        if self.img_msg is None:
             return
         img = self.bridge.imgmsg_to_cv2(self.img_msg,desired_encoding='bgr8')
 
         # Process image
         img = self.undistort(img)
-        img_below, _ = project_below(img, self.rotation, self.translation, self.K, self.K_inv)
+        img_below, _ = project_below(img, self.rotation, self.translation, self.K_inv)
 
         # Filter image for boundary
         hsv = cv2.cvtColor(img_below, cv2.COLOR_BGR2HSV)
@@ -793,83 +537,32 @@ class Driver(object):
     ### Build mapping ###
 
     def build_map(self):
-        if self.img_msg is None or not self.camera_initialized:
+        if self.img_msg is None:
             return
-
-        # Update flow
-        pos = self.img_flow_pos
-        if self.last_img_flow_pos is not None:
-            flow = pos - self.last_img_flow_pos
-
         img = self.bridge.imgmsg_to_cv2(self.img_msg,desired_encoding='bgr8')
 
         # Process image
-        img = self.undistort(img)
-        img_below, H_inv = project_below(img, self.rotation, self.translation, self.K, self.K_inv)
+        #img = self.undistort(img)
+        #img_below = project_below(img, self.rotation, self.translation, self.K_inv)
 
-        # Create view filter
-        filter_view = np.sum(img_below, axis=-1) > 0
-
-        # Create wall filter
-        hsv_below = cv2.cvtColor(img_below, cv2.COLOR_BGR2HSV)
-        filter_wall = self.filter_yellow.apply(hsv_below) > 0.5
-
-        # Apply filters
-        img_masked = np.ma.array(filter_wall, mask=~filter_view, copy=False)
-        img_below[~filter_wall] = (0,0,0)
-
-        # If not initialized or too far away, start over
-        if self.img_last is None or np.linalg.norm(flow) > 100:
-            self.last_img_flow_pos = pos
-            self.img_last = img_below
-            self.img_masked_last = img_masked
-            return
-
-        # Project flow
-        center = np.array(img.shape[:2][::-1]) / 2
-        start = center - flow
-        start_below, center_below = apply_hom(H_inv, np.array([start, center]), inv=True)
-        flow_below = center_below - start_below
-
-        # Attempt to stitch the image
-        img1, img2 = self.img_masked_last.data, img_masked.data
-        data = initialize_data(img1, img2)
-        translation_origins, score = estimate_translation_iterative(data, flow_below, reps=5)
-
-        # Convert origins offset to center offset
-        center_cur = np.array(img_below.shape[:2][::-1]) / 2
-        center_last = np.array(self.img_last.shape[:2][::-1]) / 2
-        center_offset = center_cur - center_last
-        translation = translation_origins + center_offset
-
-        img_stitched = draw_stitched(self.img_last, img_below, translation)
-        error = np.linalg.norm(translation_origins - flow_below)
-        offset = translation - flow
-
-        if error < 50 and score > -30:
-            refined_pos = pos + offset
-            self.flow_pos = self.flow_pos + offset
-            self.last_img_flow_pos = refined_pos
-            self.img_last = img_below
-            self.img_masked_last = img_masked
-            
-            # Save the image!
-            start_idx, end_idx = self.map.add(img_masked, refined_pos * (-1,1))
-
-            # Preview the map
-            img_preview = self.map.to_preview_image()
-            draw_corners(img_preview, start_idx, end_idx, color=(0,0,255))
-            cv2.imshow("Map", cv2.resize(img_preview, (512,512)))
+        # Add to image collection
+        #self.imgs_collected.append(img_below)
+        self.imgs_collected.append(img)
+        if len(self.imgs_collected) > MAX_MAPPING_BUFFER:
+            self.imgs_collected.pop(0)
+        imgs = self.imgs_collected
+        #if self.img_map is not None:
+        #    imgs = [self.img_map] + imgs
         
-        if not self.shown:
+        # Attempt to stitch the image
+        status, img_stitched = self.stitcher.stitch(imgs)
+        if status == 0:
+            self.img_map = img_stitched
+            #self.imgs_collected = []
             cv2.imshow("Stitched", img_stitched)
-            self.shown = True
-        cv2.addText(img_stitched, f"score: {score:.2f}", (100, 100), "Calibri", pointSize=12, color=(255,255,255))
-        cv2.addText(img_stitched, f"error: {error:.2f}", (100, 120), "Calibri", pointSize=12, color=(255,255,255))
-        cv2.addText(img_stitched, f"pos: ({self.flow_pos[0]:.1f},{self.flow_pos[1]:.1f})", (100, 140), "Calibri", pointSize=12, color=(255,255,255))
-        cv2.imshow("Stitched", img_stitched)
-        cv2.waitKey(3)
-
+            cv2.waitKey(3)
+        else:
+            print(len(imgs), status)
 
     ### Control the drone's flight path ###
 
@@ -885,17 +578,7 @@ class Driver(object):
     def image_callback(self, msg):
         telemetry = self.get_telemetry()
         self.rotation, self.translation, self.velocity = parse_telemetry(telemetry)
-        self.img_flow_pos = self.flow_pos
         self.img_msg = msg
-
-    def oflow_callback(self, msg):
-        #time = rospy.Time(msg.header.stamp)
-        #delta_t = time - self.last_flow_time
-        delta_x = np.array([msg.vector.x, msg.vector.y])
-        if np.linalg.norm(delta_x) > 4.0: # outlier, bad reading
-            return # skip
-        self.flow_pos = self.flow_pos + delta_x
-        #self.last_flow_time = time
 
     def caminfo_callback(self, msg):
         # Only need to initialize once
