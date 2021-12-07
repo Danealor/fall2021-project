@@ -9,6 +9,8 @@
     <arg name="gps" default="false"/> <!--Simulated GPS module -->
     <arg name="use_clover_physics" default="false"/> <!-- Use inertial parameters from CAD models -->
     <arg name="gui" default="true"/> <!-- Run Gazebo with GUI -->
+    <arg name="x" default="1.0"/> <!-- Clover starting X coordinate -->
+    <arg name="y" default="1.0"/> <!-- Clover starting Y coordinate -->
 
     <!-- Gazebo instance -->
     <include file="$(find gazebo_ros)/launch/empty_world.launch" if="$(eval type == 'gazebo')">
@@ -32,6 +34,8 @@
         <arg name="led" value="$(arg led)"/>
         <arg name="gps" value="$(arg gps)"/>
         <arg name="use_clover_physics" value="$(arg use_clover_physics)"/>
+        <arg name="x" value="$(arg x)"/>
+        <arg name="y" value="$(arg y)"/>
     </include>
 
     <node name="jmavsim" pkg="px4" type="jmavsim_run.sh" output="screen" if="$(eval type == 'jmavsim')">
