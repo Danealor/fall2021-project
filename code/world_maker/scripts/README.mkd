@@ -1,6 +1,6 @@
 # Spawning the maze world
 
-1) CD to the world_maker scripts folder (cd ~/catkin_ws/src/world_maker/scripts)
+1) CD to the world_maker scripts folder (cd ~/catkin_ws/src/fall2021-project/code/world_maker/scripts)
 
 2) OPTIONAL: 
 
@@ -10,14 +10,16 @@
 - `cp custom_world_coords.csv custom_world_coords_BACKUP.csv`
 - `cp custom_world.world custom_world_BACKUP.worlds`
 
-  If you would like to randomize the maze after that, run `python3 randomizer.py` (Note: You may need to install openpyxl -- `pip install openpyxl`)
+  If you would like to randomize the maze after that, run `python3 randomizer.py` (Note: You may need to install openpyxl: `pip install openpyxl`)
 
 3) Save the most up to date `custom_world_coords.xlsx` as a text CSV file (`custom_world_coords.csv`) - DO NOT change the name of the CSV file
 
-4) Run `python3 create.py`
+4) Run `./create.py custom_world_coords.csv ../../eagle_eye/resources/worlds/bounded_maze.world -r 0.5 -H 0.25 -b ../../eagle_eye/resources/worlds/bounded.world`. What this does is utilize the saved CSV file to create a matching .world file in the `eagle_eye` repository with a resolution of 0.5 meters, height of 0.25 meters, and builds upon the `bounded.world` world file that places a red boundary square around your newly formed maze.
 
-5) Launch the Gazebo world associated with the world_maker package (`roslaunch world_maker custom_world.launch`)
+5) Launch the Gazebo world associated with the world_maker package (`roslaunch eagle_eye maze_world.launch`)
 
-6) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xlsx`
+6) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xlsx`. THIS IS NOT THE FINAL WORLD BUILD, THE PURPOSE OF THIS IS TO VERIFY A TURTLEBOT SPAWNS WITH THE MAZE YOU DESIGNED.
 
-7) To change the color of the blocks, open the `create_world.py` script and update line 167 with a color name (Ex: Gray)
+7) OPTIONAL: To change the color of the blocks, open the `create_world.py` script and update line 157 with a color name (Ex: Gray)
+
+8) After sucessful maze and turtlebot generation, please return to the README.mkd in the main branch of this GitHub repository for next steps.
