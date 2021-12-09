@@ -8,7 +8,6 @@
 
 - `cp custom_world_coords.xls custom_world_coords_BACKUP.xlsx`
 - `cp custom_world_coords.csv custom_world_coords_BACKUP.csv`
-- `cp custom_world.world custom_world_BACKUP.worlds`
 
   If you would like to randomize the maze after that, run `python3 randomizer.py` (Note: You may need to install openpyxl: `pip install openpyxl`)
 
