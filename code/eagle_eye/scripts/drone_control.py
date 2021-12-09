@@ -7,7 +7,9 @@ import rospy
 from rospy.impl.tcpros import get_tcpros_handler
 from std_srvs.srv import Trigger
 from sensor_msgs.msg import Image, CameraInfo
-from geometry_msgs.msg import Vector3Stamped
+from geometry_msgs.msg import Vector3Stamped, Pose
+from nav_msgs.msg import OccupancyGrid, MapMetaData
+from std_msgs.msg import Header
 import clover.srv
 
 import cv2, numpy as np
@@ -474,6 +476,7 @@ class Map(object):
 
         self.shift = np.array([init_shift_x, init_shift_y], dtype=float)
         self.range, self.clip = val_range, val_clip
+        self.last_update_time = rospy.Time.now()
 
     def index(self, coords):
         "Return row,col indices from x,y coordinates."
@@ -563,6 +566,8 @@ class Map(object):
         map_range += img_change
         map_range.clip(-self.range, self.range, out=map_range)
 
+        self.last_update_time = rospy.Time.now()
+
         return start_idx, end_idx
 
     def extents(self):
@@ -594,6 +599,37 @@ class Map(object):
         green = above
 
         return (np.stack([blue, green, red], axis=-1) * 255).astype(np.uint8)
+
+    def to_occgrid(self):
+        grid = OccupancyGrid()
+
+        # Create header
+        header = Header()
+        header.stamp = rospy.Time.now()
+        header.frame_id = 'map'
+        grid.header = header
+
+        # Build metadata
+        metadata = MapMetaData()
+        metadata.map_load_time = self.last_update_time
+        metadata.resolution = 1 / RESOLUTION
+        metadata.height, metadata.width = self.matrix.shape
+
+        # - Create origin point pose
+        origin = Pose()
+        origin.position.x, origin.position.y = self.shift / RESOLUTION
+        metadata.origin = origin
+
+        grid.info = metadata
+
+        # Convert matrix data to occupancy grid
+        empty = self.matrix < -self.clip
+        filled = self.matrix > self.clip
+        known = empty | filled
+
+        grid.data = list(np.where(known, np.where(filled, 100, 0), -1).flat)
+        return grid
+
     
 def draw_corners(img, start_idx, end_idx, color=(0,0,0)):
     topleft = np.array((start_idx[0], start_idx[1]))
@@ -650,16 +686,16 @@ class Driver(object):
         self.shown = False
         self.map = Map()
 
-    def register(self):
-        self.get_telemetry = rospy.ServiceProxy('get_telemetry', clover.srv.GetTelemetry)
+    def register(self, ns=''):
+        self.get_telemetry = rospy.ServiceProxy(ns + 'get_telemetry', clover.srv.GetTelemetry)
         if self.control:
-            self.navigate = rospy.ServiceProxy('navigate', clover.srv.Navigate)
-            self.navigate_global = rospy.ServiceProxy('navigate_global', clover.srv.NavigateGlobal)
-            self.set_position = rospy.ServiceProxy('set_position', clover.srv.SetPosition)
-            self.set_velocity = rospy.ServiceProxy('set_velocity', clover.srv.SetVelocity)
-            self.set_attitude = rospy.ServiceProxy('set_attitude', clover.srv.SetAttitude)
-            self.set_rates = rospy.ServiceProxy('set_rates', clover.srv.SetRates)
-            self.land = rospy.ServiceProxy('land', Trigger)
+            self.navigate = rospy.ServiceProxy(ns + 'navigate', clover.srv.Navigate)
+            self.navigate_global = rospy.ServiceProxy(ns + 'navigate_global', clover.srv.NavigateGlobal)
+            self.set_position = rospy.ServiceProxy(ns + 'set_position', clover.srv.SetPosition)
+            self.set_velocity = rospy.ServiceProxy(ns + 'set_velocity', clover.srv.SetVelocity)
+            self.set_attitude = rospy.ServiceProxy(ns + 'set_attitude', clover.srv.SetAttitude)
+            self.set_rates = rospy.ServiceProxy(ns + 'set_rates', clover.srv.SetRates)
+            self.land = rospy.ServiceProxy(ns + 'land', Trigger)
         else:
             Retval = namedtuple('Retval', ['success', 'msg'])
             dummy_func = lambda **kwargs: Retval(success=True, msg="Dummy retval")
@@ -671,14 +707,15 @@ class Driver(object):
             self.set_rates = dummy_func
             self.land = dummy_func
 
-        self.image_sub = rospy.Subscriber('/main_camera/image_raw', 
+        self.image_sub = rospy.Subscriber(ns + '/main_camera/image_raw', 
                                           Image, self.image_callback, queue_size=1)
 
-        self.caminfo_sub = rospy.Subscriber('/main_camera/camera_info', 
+        self.caminfo_sub = rospy.Subscriber(ns + '/main_camera/camera_info', 
                                           CameraInfo, self.caminfo_callback)
 
-        self.oflow_sub = rospy.Subscriber('/optical_flow/shift',
+        self.oflow_sub = rospy.Subscriber(ns + '/optical_flow/shift',
                                           Vector3Stamped, self.oflow_callback)
+        self.map_pub = rospy.Publisher('/turtle/map', OccupancyGrid, queue_size=1)
 
         rospy.on_shutdown(self.shutdown)
 
@@ -852,6 +889,9 @@ class Driver(object):
             self.last_img_flow_pos = refined_pos
             self.img_last = img_below
             self.img_masked_last = img_masked
+
+            print(flow)
+            print(flow_below)
             
             # Save the image!
             start_idx, end_idx = self.map.add(img_masked, refined_pos * (-1,1))
@@ -860,6 +900,10 @@ class Driver(object):
             img_preview = self.map.to_preview_image()
             draw_corners(img_preview, start_idx, end_idx, color=(0,0,255))
             cv2.imshow("Map", cv2.resize(img_preview, (512,512)))
+
+            # Publish the map
+            grid = self.map.to_occgrid()
+            self.map_pub.publish(grid)
         
         if not self.shown:
             cv2.imshow("Stitched", img_stitched)
@@ -941,8 +985,7 @@ class Driver(object):
         print("Shutting down the drone_control node...")
 
         try:
-            #plt.show()
-            pass
+            self.map.plot(grid=False)
 
         except:
             e = sys.exc_info()[1]

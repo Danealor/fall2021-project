@@ -1,5 +1,9 @@
 <launch>
+    <!-- Gazebo Arguments -->
     <arg name="type" default="gazebo"/> <!-- gazebo, jmavsim, none (only clover packages) -->
+    <arg name="gui" default="true"/> <!-- Run Gazebo with GUI -->
+
+    <!-- Clover Drone Arguments -->
     <arg name="mav_id" default="0"/>
     <arg name="est" default="ekf2"/> <!-- PX4 estimator: lpe, ekf2 -->
     <arg name="vehicle" default="clover"/> <!-- PX4 vehicle configuration: clover, clover_vpe -->
@@ -8,9 +12,20 @@
     <arg name="led" default="true"/> <!-- Simulated LED strip, ws281x-like -->
     <arg name="gps" default="false"/> <!--Simulated GPS module -->
     <arg name="use_clover_physics" default="false"/> <!-- Use inertial parameters from CAD models -->
-    <arg name="gui" default="true"/> <!-- Run Gazebo with GUI -->
-    <arg name="x" default="1.0"/> <!-- Clover starting X coordinate -->
-    <arg name="y" default="1.0"/> <!-- Clover starting Y coordinate -->
+    <arg name="x_drone" default="1.0"/> <!-- Clover starting X coordinate -->
+    <arg name="y_drone" default="1.0"/> <!-- Clover starting Y coordinate -->
+
+    <!-- Turtlebot Arguments -->
+    <arg name="spawn_turtle" default="true"/>
+    <arg name="model" default="burger" doc="model type [burger, waffle, waffle_pi]"/>
+    <arg name="x_turtle" default="2.0"/>
+    <arg name="y_turtle" default="1.0"/>
+    <arg name="z_turtle" default="0.0"/>
+
+    <!-- Navigator Arguments -->
+    <arg name="nav_server" default="true"/>
+    <arg name="open_rviz" default="true"/>
+    <arg name="move_forward_only" default="false"/>
 
     <!-- Gazebo instance -->
     <include file="$(find gazebo_ros)/launch/empty_world.launch" if="$(eval type == 'gazebo')">
@@ -20,7 +35,7 @@
         <arg name="world_name" value="$(find eagle_eye)/resources/worlds/bounded_maze.world"/>
         <arg name="verbose" value="true"/>
     </include>
-
+    
     <!-- PX4 instance -->
     <node name="sitl_$(arg mav_id)" pkg="px4" type="px4" output="screen" args="$(find px4)/ROMFS/px4fmu_common -s etc/init.d-posix/rcS -i $(arg mav_id)" unless="$(eval type == 'none')">
         <env name="PX4_SIM_MODEL" value="$(arg vehicle)"/>
@@ -28,14 +43,14 @@
     </node>
 
     <!-- Clover model -->
-    <include file="$(find clover_description)/launch/spawn_drone.launch" if="$(eval type == 'gazebo')">
+    <include file="$(find eagle_eye)/launch/spawn_drone.launch" if="$(eval type == 'gazebo')">
         <arg name="main_camera" value="$(arg main_camera)"/>
         <arg name="rangefinder" value="$(arg rangefinder)"/>
         <arg name="led" value="$(arg led)"/>
         <arg name="gps" value="$(arg gps)"/>
         <arg name="use_clover_physics" value="$(arg use_clover_physics)"/>
-        <arg name="x" value="$(arg x)"/>
-        <arg name="y" value="$(arg y)"/>
+        <arg name="x" value="$(arg x_drone)"/>
+        <arg name="y" value="$(arg y_drone)"/>
     </include>
 
     <node name="jmavsim" pkg="px4" type="jmavsim_run.sh" output="screen" if="$(eval type == 'jmavsim')">
@@ -56,4 +71,19 @@
         <arg name="optical_flow" default="false" if="$(eval type == 'jmavsim')"/>
         <arg name="led" default="false" if="$(eval type == 'jmavsim')"/>
     </include>
+
+    <group if="$(arg spawn_turtle)">
+        <include file="$(find eagle_eye)/launch/turtle_nav.launch">
+            <!-- Turtlebot Arguments -->
+            <arg name="model" value="$(arg model)"/>
+            <arg name="x_pos" value="$(arg x_turtle)"/>
+            <arg name="y_pos" value="$(arg y_turtle)"/>
+            <arg name="z_pos" value="$(arg z_turtle)"/>
+
+            <!-- Navigator Arguments -->
+            <arg name="nav_server" value="$(arg nav_server)"/>
+            <arg name="open_rviz" value="$(arg open_rviz)"/>
+            <arg name="move_forward_only" value="$(arg move_forward_only)"/>
+        </include>
+    </group>
 </launch>
