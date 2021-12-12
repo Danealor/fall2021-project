@@ -464,7 +464,7 @@ def draw_stitched(img1, img2, translation):
 
 class Map(object):
 
-    def __init__(self, 
+    def __init__(self, resolution,
         init_cols=100, init_rows=100, 
         init_shift_x=0., init_shift_y=0.,
         val_range=10, val_clip=5):
@@ -473,6 +473,7 @@ class Map(object):
 
         # Height is negative because we flip vertically
         self.cell_dims = np.array([1.0, -1.0], dtype=float)
+        self.resolution = resolution
 
         self.shift = np.array([init_shift_x, init_shift_y], dtype=float)
         self.range, self.clip = val_range, val_clip
@@ -612,12 +613,12 @@ class Map(object):
         # Build metadata
         metadata = MapMetaData()
         metadata.map_load_time = self.last_update_time
-        metadata.resolution = 1 / RESOLUTION
+        metadata.resolution = 1 / self.resolution
         metadata.height, metadata.width = self.matrix.shape
 
         # - Create origin point pose
         origin = Pose()
-        origin.position.x, origin.position.y = self.shift / RESOLUTION
+        origin.position.x, origin.position.y = self.shift / self.resolution
         metadata.origin = origin
 
         grid.info = metadata
@@ -627,7 +628,7 @@ class Map(object):
         filled = self.matrix > self.clip
         known = empty | filled
 
-        grid.data = list(np.where(known, np.where(filled, 100, 0), -1).flat)
+        grid.data = list(np.where(known, np.where(filled, 100, 0), -1).T.flat)
         return grid
 
     
@@ -665,6 +666,19 @@ DIST_KEEPOUT_TARGET = 0.7 # m
 DIST_KEEPOUT_UNSTABLE = 0.1 # m
 MAX_MAPPING_BUFFER = 5 # imgs
 
+# Parameters - Image stitching
+STITCH_MAX_DIST = 100
+"Maximum distance in pixels without a match before we need to start over"
+
+STITCH_MAX_FLOW_ERR = 50
+"Maximum distance in pixels between estimated flow and matched flow"
+
+STITCH_MIN_SCORE = -30
+"Minimum score to count a match"
+
+MAP_SCALE = 4
+"Scale down factor for the map"
+
 class Driver(object):
 
     def __init__(self, control=True):
@@ -680,11 +694,13 @@ class Driver(object):
         self.flow_pos = np.zeros(2)
         self.img_flow_pos = None
         self.last_img_flow_pos = None
+        self.last_pos = None
         self.img_map = None
+        self.offset = np.zeros(2)
         self.img_last = None
         self.imgs_collected = []
         self.shown = False
-        self.map = Map()
+        self.map = Map(resolution=RESOLUTION/MAP_SCALE)
 
     def register(self, ns=''):
         self.get_telemetry = rospy.ServiceProxy(ns + 'get_telemetry', clover.srv.GetTelemetry)
@@ -834,9 +850,13 @@ class Driver(object):
             return
 
         # Update flow
-        pos = self.img_flow_pos
-        if self.last_img_flow_pos is not None:
-            flow = pos - self.last_img_flow_pos
+        #pos = self.img_flow_pos
+        #if self.last_img_flow_pos is not None:
+        #    flow = pos - self.last_img_flow_pos
+
+        pos = self.translation[:2][::-1] * RESOLUTION
+        if self.last_pos is not None:
+            flow_below = pos - self.last_pos
 
         img = self.bridge.imgmsg_to_cv2(self.img_msg,desired_encoding='bgr8')
 
@@ -854,24 +874,27 @@ class Driver(object):
         # Apply filters
         img_masked = np.ma.array(filter_wall, mask=~filter_view, copy=False)
         img_below[~filter_wall] = (0,0,0)
+        img_masked_scaled = img_masked[::MAP_SCALE, ::MAP_SCALE]
 
         # If not initialized or too far away, start over
-        if self.img_last is None or np.linalg.norm(flow) > 100:
-            self.last_img_flow_pos = pos
+        if self.img_last is None or np.linalg.norm(flow_below) > STITCH_MAX_DIST:
+            #self.last_img_flow_pos = pos
+            self.last_pos = pos
             self.img_last = img_below
-            self.img_masked_last = img_masked
+            self.img_masked_last = img_masked_scaled
             return
 
         # Project flow
-        center = np.array(img.shape[:2][::-1]) / 2
-        start = center - flow
-        start_below, center_below = apply_hom(H_inv, np.array([start, center]), inv=True)
-        flow_below = center_below - start_below
+        #center = np.array(img.shape[:2][::-1]) / 2
+        #start = center - flow
+        #start_below, center_below = apply_hom(H_inv, np.array([start, center]), inv=True)
+        #flow_below = center_below - start_below
 
         # Attempt to stitch the image
-        img1, img2 = self.img_masked_last.data, img_masked.data
+        img1, img2 = self.img_masked_last.data, img_masked_scaled.data
         data = initialize_data(img1, img2)
-        translation_origins, score = estimate_translation_iterative(data, flow_below, reps=5)
+        translation_origins_scaled, score = estimate_translation_iterative(data, flow_below, reps=3)
+        translation_origins = translation_origins_scaled * MAP_SCALE
 
         # Convert origins offset to center offset
         center_cur = np.array(img_below.shape[:2][::-1]) / 2
@@ -880,21 +903,26 @@ class Driver(object):
         translation = translation_origins + center_offset
 
         img_stitched = draw_stitched(self.img_last, img_below, translation)
-        error = np.linalg.norm(translation_origins - flow_below)
-        offset = translation - flow
+        error = np.linalg.norm(translation - flow_below)
+        offset = translation - flow_below
 
-        if error < 50 and score > -30:
-            refined_pos = pos + offset
-            self.flow_pos = self.flow_pos + offset
-            self.last_img_flow_pos = refined_pos
+        if error < STITCH_MAX_FLOW_ERR and score > STITCH_MIN_SCORE:
+            self.offset += offset
+            refined_pos = pos + self.offset
+            #self.flow_pos = self.flow_pos + offset
+            #self.last_img_flow_pos = refined_pos
+            self.last_pos = pos
             self.img_last = img_below
-            self.img_masked_last = img_masked
+            self.img_masked_last = img_masked_scaled
 
-            print(flow)
-            print(flow_below)
+            print('est pos:', pos)
+            print('flow below:', flow_below)
+            print('true below:', translation)
+            print('true pos:', refined_pos)
+            print('accrued offset:', self.offset)
             
             # Save the image!
-            start_idx, end_idx = self.map.add(img_masked, refined_pos * (-1,1))
+            start_idx, end_idx = self.map.add(img_masked_scaled, refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
 
             # Preview the map
             img_preview = self.map.to_preview_image()
@@ -910,7 +938,7 @@ class Driver(object):
             self.shown = True
         cv2.addText(img_stitched, f"score: {score:.2f}", (100, 100), "Calibri", pointSize=12, color=(255,255,255))
         cv2.addText(img_stitched, f"error: {error:.2f}", (100, 120), "Calibri", pointSize=12, color=(255,255,255))
-        cv2.addText(img_stitched, f"pos: ({self.flow_pos[0]:.1f},{self.flow_pos[1]:.1f})", (100, 140), "Calibri", pointSize=12, color=(255,255,255))
+        cv2.addText(img_stitched, f"pos: ({self.translation[0]:.1f},{self.translation[1]:.1f})", (100, 140), "Calibri", pointSize=12, color=(255,255,255))
         cv2.imshow("Stitched", img_stitched)
         cv2.waitKey(3)
 

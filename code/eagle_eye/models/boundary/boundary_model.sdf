@@ -1,13 +1,13 @@
 <?xml version="1.0"?>
 <sdf version="1.5">
     <model name="boundary">
-        <pose>1 2.3 0.0 0 0 0</pose>
+        <pose>5 4.5 0.0 0 0 0</pose>
         <static>True</static>
         <link name="boundary_link">
             <visual name="boundary_vis">
                 <geometry>
                     <box>
-                        <size>25 25 1e-3</size>
+                        <size>15 15 1e-3</size>
                     </box>
                 </geometry>
                 <material>
