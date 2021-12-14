@@ -156,6 +156,21 @@ def homogeneous_translation(t_vec):
     T[:len(t_vec),-1] = t_vec
     return T
 
+def add_homogeneous_translation(M, t_vec, inv=False):
+    if inv:
+        t_vec_scaled = t_vec / M[-1, -1]
+    else:
+        t_vec_scaled = t_vec * M[-1, -1]
+    M[:len(t_vec),-1] += t_vec_scaled
+    return M
+
+def homogeneous_rotation(angle, center):
+    R = Rotation.from_euler('xyz', [0,0,angle]).as_matrix()
+    T = homogeneous_translation(center)
+    T_inv = homogeneous_translation(-center)
+    M = T @ R @ T_inv
+    return M
+
 def apply_hom(H, pts, inv=False):
     pts_hom = cv2.convertPointsToHomogeneous(pts)[:,0,:]
     pts_tf_hom = (H @ pts_hom.T).T
@@ -171,12 +186,15 @@ corners_coeff = np.array(
      [1,0],
      [1,1]]
 )
-def roi(image_size, H):
-    "Returns bounding box after an image of some size goes through a homogenous transformation"
-    corners = corners_coeff * image_size
-    corners_tf = apply_hom(H, corners, inv=True)
-    min_pt = np.min(corners_tf, axis=0)
-    max_pt = np.max(corners_tf, axis=0)
+def calc_corners(image_shape, H, inv=True):
+    "Returns corners after an image of some size goes through a homogenous transformation"
+    corners = corners_coeff * image_shape[:2][::-1]
+    return apply_hom(H, corners, inv)
+
+def calc_roi(corners):
+    "Returns bounding box of an image's corners"
+    min_pt = np.min(corners, axis=0)
+    max_pt = np.max(corners, axis=0)
     return min_pt, max_pt
 
 def project_below(img, R_euler, T_vec, K, K_inv):
@@ -193,17 +211,44 @@ def project_below(img, R_euler, T_vec, K, K_inv):
     H_inv_scaled = S_inv @ H_inv
 
     # Apply bounding box but retain center
-    min_pt, max_pt = roi(img.shape[:2][::-1], H_inv_scaled)
+    min_pt, max_pt = calc_roi(calc_corners(img.shape, H_inv_scaled))
     max_dist = np.max(np.abs(np.stack([min_pt, max_pt])),axis=0)
     out_size = np.ceil(max_dist * 2).astype(int)
     T_center = homogeneous_translation(-out_size / 2)
-    T_center_inv = homogeneous_translation(out_size / 2)
-    H_inv_scaled_centered = T_center_inv @ H_scaled
+    H_inv_scaled_centered = add_homogeneous_translation(H_inv_scaled.copy(), out_size / 2, inv=True)
     H_scaled_centered = H_scaled @ T_center
 
     # Apply transformation
     img_below = cv2.warpPerspective(img, H_scaled_centered, out_size, flags=cv2.WARP_INVERSE_MAP)
-    return img_below, H_scaled_centered
+    return img_below, H_inv_scaled_centered
+
+def rotate_image(img, angle, corners=None):
+    "Rotates image about center, resizing as necessary but maintaining center"
+    img_size = np.array(img.shape[:2][::-1])
+    center = img_size / 2
+
+    # Calculate new extents of rotated image
+    R = homogeneous_rotation(-angle, center)
+    if corners is None:
+        corners_tf = calc_corners(img.shape, R, inv=False)
+    else:
+        corners_tf = apply_hom(R, corners)
+    offsets = corners_tf - center
+    extents = np.max(np.abs(offsets), axis=0)
+    out_size = np.ceil(extents * 2).astype(int)
+    center_new = out_size / 2
+
+    # Rotate image and retain center
+    M = cv2.getRotationMatrix2D(center, np.rad2deg(-angle), 1)
+    M[:2, -1] += center_new - center
+    img_rot = cv2.warpAffine(img, M, out_size)
+    return img_rot, corners_tf
+
+def calc_center_offset(img1, img2):
+    center1 = np.array(img1.shape[:2][::-1]) / 2
+    center2 = np.array(img2.shape[:2][::-1]) / 2
+    return center2 - center1
+
 
 ### Image Stitching ###
 
@@ -244,32 +289,51 @@ def diagonals(arr, k):
     mask_expanded = np.broadcast_to(mask.reshape(shp_flat), shp)
     return np.ma.array(arr[i,j], mask=mask_expanded)
 
-def initialize_data(img1, img2):
-    data = {'images': [{'img': img1}, {'img': img2}]}
+def initialize_data(img, filter, filter_view):
+    # Apply filters
+    img_masked = np.ma.array(filter, mask=~filter_view, copy=False)
+    if img is not None:
+        img[~filter] = (0,0,0)
+    img_masked_scaled = img_masked[::MAP_SCALE, ::MAP_SCALE]
 
-    for d in data['images']:
-        d['filt'] = d['img'].astype(np.int8)
+    # Create data structure
+    data = {'img_raw': img, 
+            'img_masked': img_masked_scaled, 
+            'img': img_masked_scaled.data, 
+            'prepared': False}
+    return data
 
-        d['axis'] = [{'name': 'y'}, {'name': 'x'}]
-        for ax, a in enumerate(d['axis']):
-            a['diff'] = np.diff(d['filt'], axis=ax)
+def prepare_data(data, axis='both'):
+    data['filt'] = data['img'].astype(np.int8)
 
-            a['dir'] = [{'dir': 1}, {'dir': -1}]
-            for dr in a['dir']:
-                dr['mask'] = a['diff'] == dr['dir']
-                dr['cum_nonaligned'] = np.cumsum(dr['mask'], axis=ax)
-                dr['cum'] = dr['cum_nonaligned'].T if a['name'] == 'y' else dr['cum_nonaligned']
-                dr['count'] = dr['cum'][:,-1]
-                dr['maxcount'] = np.max(dr['count'])
-                offs = np.arange(dr['cum'].shape[0]) * (dr['maxcount']+1)
-                cumflat = (dr['cum'] + offs[:,None]).flat
-                searchfor = offs[:,None] + np.arange(dr['maxcount']) + 1
-                ss = np.searchsorted(cumflat, searchfor.flat)
-                offs = np.arange(dr['cum'].shape[0]) * dr['cum'].shape[1]
-                dr['indices'] = ss.reshape((dr['cum'].shape[0], dr['maxcount'])) - offs[:,None]
+    data['axis'] = [{'name': 'y'}, {'name': 'x'}]
+    for ax, a in enumerate(data['axis']):
+        a['prepared'] = False
+        if not (axis == 'both' or a['name'] == axis):
+            continue
 
-                # Convert to masked array
-                dr['indices'] = np.ma.masked_where(np.arange(dr['maxcount']) >= dr['count'][:,None], dr['indices'], copy=False)
+        a['diff'] = np.diff(data['filt'], axis=ax)
+
+        a['dir'] = [{'dir': 1}, {'dir': -1}]
+        for dr in a['dir']:
+            dr['mask'] = a['diff'] == dr['dir']
+            dr['cum_nonaligned'] = np.cumsum(dr['mask'], axis=ax)
+            dr['cum'] = dr['cum_nonaligned'].T if a['name'] == 'y' else dr['cum_nonaligned']
+            dr['count'] = dr['cum'][:,-1]
+            dr['maxcount'] = np.max(dr['count'])
+            offs = np.arange(dr['cum'].shape[0]) * (dr['maxcount']+1)
+            cumflat = (dr['cum'] + offs[:,None]).flat
+            searchfor = offs[:,None] + np.arange(dr['maxcount']) + 1
+            ss = np.searchsorted(cumflat, searchfor.flat)
+            offs = np.arange(dr['cum'].shape[0]) * dr['cum'].shape[1]
+            dr['indices'] = ss.reshape((dr['cum'].shape[0], dr['maxcount'])) - offs[:,None]
+
+            # Convert to masked array
+            dr['indices'] = np.ma.masked_where(np.arange(dr['maxcount']) >= dr['count'][:,None], dr['indices'], copy=False)
+
+        a['prepared'] = True
+
+    data['prepared'] = True
 
     return data
 
@@ -371,11 +435,17 @@ class DiagEstimator(BaseEstimator):
         return score
 
 ransac = RANSACRegressor(base_estimator=DiagEstimator(), min_samples=1)
-def estimate_translation_guess(data, guess):
+def estimate_translation_guess(d1, d2, guess):
+    guess = np.round(guess).astype(int)
     try:
-        d1, d2 = data['images']
+        data = {}
         data['axis'] = [{'name': 'y'}, {'name': 'x'}]
         for a, a1, a2, offs, guess_ax in zip(data['axis'], d1['axis'], d2['axis'], guess, guess[::-1]):
+            if not a1['prepared'] or not a2['prepared']:
+                a['dist'] = 0
+                a['score'] = 0
+                continue
+
             a['dir'] = [{'dir': 1}, {'dir': -1}]
             for dr, dr1, dr2 in zip(a['dir'], a1['dir'], a2['dir']):
                 # Prepare offset ranges
@@ -389,12 +459,14 @@ def estimate_translation_guess(data, guess):
                 start2, end2 = ranges[1]
                 
                 if start1 == end1:
+                    print("Stitching failed: Initial guess too far away.")
                     return guess, -np.inf # Too far away!
 
                 counts = np.stack([dr1['count'][start1:end1], dr2['count'][start2:end2]])
                 mincounts = np.min(counts, axis=0)
                 numdims = np.min(np.max(counts, axis=-1))
                 if numdims == 0:
+                    print("Stitching failed: No features found.")
                     return guess, -np.inf # No features found!
 
                 pts1 = dr1['indices'][start1:end1]
@@ -425,13 +497,14 @@ def estimate_translation_guess(data, guess):
         translation = np.array([a['dist'] for a in data['axis']][::-1])
         score = np.sum([a['score'] for a in data['axis']])
         return translation, score
-    except:
+    except ValueError as e:
         # Computation error
+        print("Stitching failed: " + e)
         return guess, -np.inf
 
-def estimate_translation_iterative(data, guess, reps, stop_dist=3):
+def estimate_translation_iterative(d1, d2, guess, reps, stop_dist=3):
     for _ in range(reps):
-        solution, score = estimate_translation_guess(data, np.round(guess).astype(int))
+        solution, score = estimate_translation_guess(d1, d2, np.round(guess).astype(int))
         if np.linalg.norm(solution - guess) < stop_dist:
             break
         guess = solution
@@ -458,6 +531,35 @@ def draw_stitched(img1, img2, translation):
         np.putmask(view, mask_broad, img)
     
     return img_combined
+
+
+### Contour Functions ###
+
+def find_largest_hole(contours, hierarchy):
+    if hierarchy is None:
+        return -1, 0
+    hierarchy_arr = np.array(hierarchy[0])
+
+    # Get first children of outer contours
+    filter_outer = hierarchy_arr[:,3] == -1
+    filter_has_child = hierarchy_arr[:,2] >= 0
+    first_children_seed = hierarchy_arr[filter_outer & filter_has_child,2]
+
+    # If no holes, return
+    if len(first_children_seed) == 0:
+        return -1, 0
+
+    # Get all children
+    first_children = first_children_seed
+    while np.count_nonzero(hierarchy_arr[first_children_seed,0] >= 0):
+        next_children = hierarchy_arr[first_children_seed,0]
+        first_children_seed = next_children[next_children >= 0]
+        first_children = np.concatenate([first_children, first_children_seed])
+    
+    # Get areas of all outer holes
+    areas = [cv2.contourArea(contours[hole]) for hole in first_children]
+    child_idx = np.argmax(areas)
+    return first_children[child_idx], areas[child_idx]
 
 
 ### Mapping ###
@@ -601,6 +703,11 @@ class Map(object):
 
         return (np.stack([blue, green, red], axis=-1) * 255).astype(np.uint8)
 
+    def to_threshold_image(self, include_uncertain=False):
+        "Converts matrix to threshold Greyscale image for contouring"
+        threshold = 0 if include_uncertain else self.clip
+        return ((self.matrix > threshold) * 255).astype(np.uint8)
+
     def to_occgrid(self):
         grid = OccupancyGrid()
 
@@ -658,15 +765,16 @@ def draw_corners(img, start_idx, end_idx, color=(0,0,0)):
 # Parameters
 CONTROL_RATE = 5 # Hz
 SPEED_TAKEOFF = 0.5 # m/s
-SPEED_FLY = 1.0 # m/s
+SPEED_FLY = 0.25 # m/s
 FLIGHT_HEIGHT = 1.5 # m
 TARGET_FLOW_DIST = 1.0 # m
-SPEED_STABILITY = 0.1 # m/s
-DIST_KEEPOUT_TARGET = 0.7 # m
+SPEED_STABILITY = 0.05 # m/s
+DIST_KEEPOUT_TARGET = 1.0 # m
 DIST_KEEPOUT_UNSTABLE = 0.1 # m
-MAX_MAPPING_BUFFER = 5 # imgs
 
 # Parameters - Image stitching
+STITCH_MODE_DEFAULT = 'auto'
+
 STITCH_MAX_DIST = 100
 "Maximum distance in pixels without a match before we need to start over"
 
@@ -676,13 +784,17 @@ STITCH_MAX_FLOW_ERR = 50
 STITCH_MIN_SCORE = -30
 "Minimum score to count a match"
 
+STITCH_AUTO_FLOW_THRESH = 10
+"Distance in pixels where the auto stitch mode switches from nearby to direction-aligned"
+
 MAP_SCALE = 4
 "Scale down factor for the map"
 
 class Driver(object):
 
-    def __init__(self, control=True):
+    def __init__(self, control=True, mode=STITCH_MODE_DEFAULT):
         self.running = False
+        self.stitch_mode = mode
         self.control = control
         self.state = 'take_off'
         self.img_msg = None
@@ -700,7 +812,8 @@ class Driver(object):
         self.img_last = None
         self.imgs_collected = []
         self.shown = False
-        self.map = Map(resolution=RESOLUTION/MAP_SCALE)
+        self.map_walls = Map(resolution=RESOLUTION/MAP_SCALE)
+        self.map_boundary = Map(resolution=RESOLUTION/MAP_SCALE)
 
     def register(self, ns=''):
         self.get_telemetry = rospy.ServiceProxy(ns + 'get_telemetry', clover.srv.GetTelemetry)
@@ -729,8 +842,6 @@ class Driver(object):
         self.caminfo_sub = rospy.Subscriber(ns + '/main_camera/camera_info', 
                                           CameraInfo, self.caminfo_callback)
 
-        self.oflow_sub = rospy.Subscriber(ns + '/optical_flow/shift',
-                                          Vector3Stamped, self.oflow_callback)
         self.map_pub = rospy.Publisher('/turtle/map', OccupancyGrid, queue_size=1)
 
         rospy.on_shutdown(self.shutdown)
@@ -743,7 +854,6 @@ class Driver(object):
         while not rospy.is_shutdown():
             if self.running:
                 self.branch_state()
-                self.build_map()
 
             rate.sleep()
 
@@ -772,20 +882,24 @@ class Driver(object):
             self.state = 'find_edge'
 
     def state_find_edge(self):
-        if self.img_msg is None or not self.camera_initialized:
+        img_below, corners = self.process_image()
+        if img_below is None:
             return
-        img = self.bridge.imgmsg_to_cv2(self.img_msg,desired_encoding='bgr8')
-
-        # Process image
-        img = self.undistort(img)
-        img_below, _ = project_below(img, self.rotation, self.translation, self.K, self.K_inv)
 
         # Filter image for boundary
         hsv = cv2.cvtColor(img_below, cv2.COLOR_BGR2HSV)
         filter = self.filter_red.apply(hsv)
         filter_img = (filter * 255).astype(np.uint8)
-        edges = cv2.Canny(filter_img, 20, 240)
 
+        # Build map
+        self.build_map(img_below, filter > 0.5, corners)
+
+        # Preview the map
+        img_preview = self.map_boundary.to_preview_image()
+        cv2.imshow("Boundary Map", cv2.resize(img_preview, (512,512)))
+
+        # Find boundary edges
+        edges = cv2.Canny(filter_img, 20, 240)
         edges_idx = np.moveaxis(np.indices(edges.shape),0,-1)[edges>127].reshape(-1,2)
         edges_xy = idx_to_xy(edges_idx)
 
@@ -794,10 +908,21 @@ class Driver(object):
             if np.linalg.norm(self.velocity) <= SPEED_STABILITY:
                 # Not moving, just go forward
                 self.set_velocity(vx=SPEED_FLY, frame_id='body')
-            cv2.imshow("Camera", img)
+            #cv2.imshow("Camera", img)
             cv2.imshow("Below", img_below)
             cv2.waitKey(3)
             return
+
+        # Check if boundary has been completed
+        contours, hierarchy = cv2.findContours(self.map_boundary.to_threshold_image(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        hole, area = find_largest_hole(contours, hierarchy)
+        if hole != -1 and area > 10000:
+            # Boundary complete!
+            cnt = contours[hole]
+            img_boundary = np.zeros(self.map_boundary.matrix.shape, dtype=np.uint8)
+            cv2.drawContours(img_boundary, contours, hole, color=255, thickness=cv2.FILLED)
+            cv2.imshow("Boundary", img_boundary)
+            print("CLOSED!")
 
         # Draw edge points
         img_edges = np.zeros_like(img_below)
@@ -811,7 +936,7 @@ class Driver(object):
         closest_pt_idx = xy_to_idx(closest_pt_xy)
 
         # Draw line to closest point
-        cv2.line(img_below, to_cv(center_idx), to_cv(closest_pt_idx), (0,255,255), 2)
+        #cv2.line(img_below, to_cv(center_idx), to_cv(closest_pt_idx), (0,255,255), 2)
         cv2.line(img_edges, to_cv(center_idx), to_cv(closest_pt_idx), (0,255,255), 1)
 
         # Control drone
@@ -829,12 +954,12 @@ class Driver(object):
             control_pt_xy = center_xy + control_phy * RESOLUTION
             control_pt_idx = xy_to_idx(control_pt_xy)
 
-            cv2.line(img_below, to_cv(center_idx), to_cv(control_pt_idx), (0,255,0), 2)
+            #cv2.line(img_below, to_cv(center_idx), to_cv(control_pt_idx), (0,255,0), 2)
             cv2.line(img_edges, to_cv(center_idx), to_cv(control_pt_idx), (0,255,0), 1)
 
         # Show imagery
-        cv2.imshow("Camera", img)
-        cv2.imshow("Below", img_below)
+        #cv2.imshow("Camera", img)
+        #cv2.imshow("Below", img_below)
         cv2.imshow("Parsed", img_edges)
         cv2.waitKey(3)
         
@@ -845,75 +970,91 @@ class Driver(object):
 
     ### Build mapping ###
 
-    def build_map(self):
+    def process_image(self):
         if self.img_msg is None or not self.camera_initialized:
-            return
-
-        # Update flow
-        #pos = self.img_flow_pos
-        #if self.last_img_flow_pos is not None:
-        #    flow = pos - self.last_img_flow_pos
-
-        pos = self.translation[:2][::-1] * RESOLUTION
-        if self.last_pos is not None:
-            flow_below = pos - self.last_pos
+            return None, np.zeros((3,3))
 
         img = self.bridge.imgmsg_to_cv2(self.img_msg,desired_encoding='bgr8')
-
-        # Process image
         img = self.undistort(img)
         img_below, H_inv = project_below(img, self.rotation, self.translation, self.K, self.K_inv)
+        corners = calc_corners(img.shape, H_inv)
+        return img_below, corners
 
+    def snap_flow(self):
+        "Take a snapshot of the current translational difference from the last position"
+        pos = self.translation[:2][::-1] * RESOLUTION
+        if self.last_pos is not None:
+            flow = pos - self.last_pos
+        else:
+            flow = None
+        return pos, flow
+
+    def reset_flow(self, pos, data):
+        "Reset flow by setting current refined position as new start position, with data"
+        self.last_pos = pos
+        self.last_data = data
+
+    def create_filters(self, img):
         # Create view filter
-        filter_view = np.sum(img_below, axis=-1) > 0
+        filter_view = np.sum(img, axis=-1) > 0
 
         # Create wall filter
-        hsv_below = cv2.cvtColor(img_below, cv2.COLOR_BGR2HSV)
+        hsv_below = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         filter_wall = self.filter_yellow.apply(hsv_below) > 0.5
 
+        return filter_wall, filter_view
+
+    def reintialize_data_rotated(self, data, angle):
+        img = data['img_raw']
+        corners = data['corners'] if 'corners' in data else None
+        img_rot, corners_tf = rotate_image(img, angle, corners)
+        data = initialize_data(img_rot, *self.create_filters(img_rot))
+        data['corners'] = corners_tf
+        return data
+
+    def build_map(self, img_below, filter_boundary, corners):
+        # Update flow
+        pos, flow_below = self.snap_flow()
+
         # Apply filters
-        img_masked = np.ma.array(filter_wall, mask=~filter_view, copy=False)
-        img_below[~filter_wall] = (0,0,0)
-        img_masked_scaled = img_masked[::MAP_SCALE, ::MAP_SCALE]
+        filter_wall, filter_view = self.create_filters(img_below)
+        data = initialize_data(img_below, filter_wall, filter_view)
+        data['corners'] = corners
+
+        # Apply filters to boundary image too
+        data_boundary = initialize_data(None, filter_boundary, filter_view)
 
         # If not initialized or too far away, start over
-        if self.img_last is None or np.linalg.norm(flow_below) > STITCH_MAX_DIST:
-            #self.last_img_flow_pos = pos
-            self.last_pos = pos
-            self.img_last = img_below
-            self.img_masked_last = img_masked_scaled
+        if flow_below is None or np.linalg.norm(flow_below) > STITCH_MAX_DIST:
+            self.reset_flow(pos, data)
             return
+        
+        # Select between switching modes
+        if self.stitch_mode == 'auto':
+            # Choose mode based on flow distance
+            if np.linalg.norm(flow_below) > STITCH_AUTO_FLOW_THRESH:
+                stitch_mode = 'aligned_dir'
+            else:
+                stitch_mode = 'search_nearby'
+            print("Stitch Mode:", stitch_mode)
+        else:
+            stitch_mode = self.stitch_mode
 
-        # Project flow
-        #center = np.array(img.shape[:2][::-1]) / 2
-        #start = center - flow
-        #start_below, center_below = apply_hom(H_inv, np.array([start, center]), inv=True)
-        #flow_below = center_below - start_below
+        if stitch_mode == 'aligned_dir':
+            translation, score = self.stitch_aligned(data, flow_below)
+        elif stitch_mode == 'search_nearby':
+            translation, score = self.stitch_nearby(data, flow_below)
+        else:
+            raise ValueError(f"Unrecognized map stitching mode '{self.stitch_mode}'!")
 
-        # Attempt to stitch the image
-        img1, img2 = self.img_masked_last.data, img_masked_scaled.data
-        data = initialize_data(img1, img2)
-        translation_origins_scaled, score = estimate_translation_iterative(data, flow_below, reps=3)
-        translation_origins = translation_origins_scaled * MAP_SCALE
-
-        # Convert origins offset to center offset
-        center_cur = np.array(img_below.shape[:2][::-1]) / 2
-        center_last = np.array(self.img_last.shape[:2][::-1]) / 2
-        center_offset = center_cur - center_last
-        translation = translation_origins + center_offset
-
-        img_stitched = draw_stitched(self.img_last, img_below, translation)
+        img_stitched = draw_stitched(self.last_data['img_raw'], data['img_raw'], translation)
         error = np.linalg.norm(translation - flow_below)
         offset = translation - flow_below
 
         if error < STITCH_MAX_FLOW_ERR and score > STITCH_MIN_SCORE:
             self.offset += offset
             refined_pos = pos + self.offset
-            #self.flow_pos = self.flow_pos + offset
-            #self.last_img_flow_pos = refined_pos
-            self.last_pos = pos
-            self.img_last = img_below
-            self.img_masked_last = img_masked_scaled
+            self.reset_flow(pos, data)
 
             print('est pos:', pos)
             print('flow below:', flow_below)
@@ -922,15 +1063,16 @@ class Driver(object):
             print('accrued offset:', self.offset)
             
             # Save the image!
-            start_idx, end_idx = self.map.add(img_masked_scaled, refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+            start_idx, end_idx = self.map_walls.add(data['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+            self.map_boundary.add(data_boundary['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
 
             # Preview the map
-            img_preview = self.map.to_preview_image()
+            img_preview = self.map_walls.to_preview_image()
             draw_corners(img_preview, start_idx, end_idx, color=(0,0,255))
             cv2.imshow("Map", cv2.resize(img_preview, (512,512)))
 
             # Publish the map
-            grid = self.map.to_occgrid()
+            grid = self.map_walls.to_occgrid()
             self.map_pub.publish(grid)
         
         if not self.shown:
@@ -940,7 +1082,63 @@ class Driver(object):
         cv2.addText(img_stitched, f"error: {error:.2f}", (100, 120), "Calibri", pointSize=12, color=(255,255,255))
         cv2.addText(img_stitched, f"pos: ({self.translation[0]:.1f},{self.translation[1]:.1f})", (100, 140), "Calibri", pointSize=12, color=(255,255,255))
         cv2.imshow("Stitched", img_stitched)
-        cv2.waitKey(3)
+
+    def stitch_aligned(self, data, flow_below):
+        # Find direction of travel
+        angle = np.arctan2(flow_below[1], flow_below[0])
+
+        # Rotate images to align with direction of travel
+        data_rot = self.reintialize_data_rotated(data, -angle)
+        last_data_rot = self.reintialize_data_rotated(self.last_data, -angle)
+
+        cv2.imshow("Rotated", data_rot['img_raw'])
+
+        # Prepare images with stitching data
+        prepare_data(data_rot, axis='x')
+        prepare_data(last_data_rot, axis='x')
+
+        # Calculate difference in centers
+        center_offset = calc_center_offset(last_data_rot['img_raw'], data_rot['img_raw'])
+
+        # Rotate flow into alignment
+        flow_rotated = apply_hom(homogeneous_rotation(-angle, np.zeros(2)), np.array([flow_below]))[0]
+
+        # Convert center offset to origins offset
+        flow_origins = flow_rotated - center_offset
+
+        # Attempt to stitch the image
+        translation_origins_scaled, score = estimate_translation_guess(last_data_rot, data_rot, flow_origins)
+        translation_origins = translation_origins_scaled * MAP_SCALE
+
+        # Convert origins offset to center offset
+        translation_rotated = translation_origins + center_offset
+
+        # Rotate translation into map
+        translation = apply_hom(homogeneous_rotation(angle, np.zeros(2)), np.array([translation_rotated]))[0]
+
+        return translation, score
+
+
+    def stitch_nearby(self, data, flow_below):
+        # Prepare images with stitching data
+        prepare_data(data)
+        if not self.last_data['prepared']:
+            prepare_data(self.last_data)
+
+        # Calculate difference in centers
+        center_offset = calc_center_offset(self.last_data['img_raw'], data['img_raw'])
+
+        # Convert center offset to origins offset
+        flow_origins = flow_below - center_offset
+
+        # Attempt to stitch the image
+        translation_origins_scaled, score = estimate_translation_iterative(self.last_data, data, flow_origins, reps=3)
+        translation_origins = translation_origins_scaled * MAP_SCALE
+
+        # Convert origins offset to center offset
+        translation = translation_origins + center_offset
+
+        return translation, score
 
 
     ### Control the drone's flight path ###
@@ -959,15 +1157,6 @@ class Driver(object):
         self.rotation, self.translation, self.velocity = parse_telemetry(telemetry)
         self.img_flow_pos = self.flow_pos
         self.img_msg = msg
-
-    def oflow_callback(self, msg):
-        #time = rospy.Time(msg.header.stamp)
-        #delta_t = time - self.last_flow_time
-        delta_x = np.array([msg.vector.x, msg.vector.y])
-        if np.linalg.norm(delta_x) > 4.0: # outlier, bad reading
-            return # skip
-        self.flow_pos = self.flow_pos + delta_x
-        #self.last_flow_time = time
 
     def caminfo_callback(self, msg):
         # Only need to initialize once
@@ -1013,7 +1202,7 @@ class Driver(object):
         print("Shutting down the drone_control node...")
 
         try:
-            self.map.plot(grid=False)
+            self.map_walls.plot(grid=False)
 
         except:
             e = sys.exc_info()[1]
@@ -1034,6 +1223,12 @@ def parse_args():
         kwargs['control'] = rospy.get_param('~control')
         if not kwargs['control']:
             rospy.loginfo("PARAMS: Drone control disabled.")
+
+    if rospy.has_param('~mode'):
+        kwargs['mode'] = rospy.get_param('~mode')
+        rospy.loginfo(f"PARAMS: Stitching mode set to '{kwargs['mode']}'.")
+    else:
+        rospy.loginfo(f"PARAMS: No stitching mode given, defaulting to '{STITCH_MODE_DEFAULT}'.")
 
     return kwargs
 
