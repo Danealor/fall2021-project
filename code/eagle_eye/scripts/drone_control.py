@@ -532,6 +532,40 @@ def draw_stitched(img1, img2, translation):
     
     return img_combined
 
+def find_first_below(img):
+    return np.argmax(img, axis=0)
+
+def find_edge_dists(img, side):
+    center = np.round(np.array(img.shape) / 2).astype(int)
+    if side == 'bottom':
+        dists = find_first_below(img[center[0]:,:])
+    elif side == 'top':
+        dists = find_first_below(img[center[0]::-1,:])
+    elif side == 'right':
+        dists = find_first_below(img[:,center[1]:].T)
+    elif side == 'left':
+        dists = find_first_below(img[:,center[1]::-1].T)
+    else:
+        raise ValueError()
+    return dists[dists > 0]
+
+def find_edge_dist(img):
+    sides = ['top', 'right', 'bottom', 'left']
+    dists = [find_edge_dists(img, side) for side in sides]
+    num_dists = [len(dist) for dist in dists]
+    side_idx = np.argmax(num_dists)
+
+    side = sides[side_idx]
+    num = num_dists[side_idx]
+    dist = np.median(dists[side_idx])
+
+    return dist, side, num
+
+def find_closest(img, point):
+    assert(img.dtype == bool)
+    pts = np.moveaxis(np.indices(img.shape), 0, -1)[img]
+    tree = KDTree(pts)
+    return np.array(tree.query(point))
 
 ### Contour Functions ###
 
@@ -655,14 +689,17 @@ class Map(object):
         idx = self.validate_entry(idx)
         self.matrix[idx[...,0], idx[...,1]] = value
 
-    def add(self, img, center):
+    def update(self, img, center):
         assert(img.dtype == bool)
         img_change = img.astype(np.int8) * 2 - 1
-        img_size = np.array(img.shape[1::-1])
+        return self.add(img_change, center)
+
+    def add(self, img_change, center):
+        img_size = np.array(img_change.shape[1::-1])
 
         topleft = center + (img_size / 2) * (-1, 1)
         topleft_idx = self.index(topleft)
-        botright_idx = topleft_idx + img.shape[:2]
+        botright_idx = topleft_idx + img_change.shape[:2]
         start_idx, end_idx = self.validate_entry(np.array([topleft_idx, botright_idx]))
 
         map_range = self.matrix[start_idx[0]:end_idx[0], start_idx[1]:end_idx[1]]
@@ -769,8 +806,11 @@ SPEED_FLY = 0.25 # m/s
 FLIGHT_HEIGHT = 1.5 # m
 TARGET_FLOW_DIST = 1.0 # m
 SPEED_STABILITY = 0.05 # m/s
+
+# Parameters - Edge Finding
 DIST_KEEPOUT_TARGET = 1.0 # m
 DIST_KEEPOUT_UNSTABLE = 0.1 # m
+EDGE_POINTS_MIN = 100
 
 # Parameters - Image stitching
 STITCH_MODE_DEFAULT = 'auto'
@@ -784,7 +824,7 @@ STITCH_MAX_FLOW_ERR = 50
 STITCH_MIN_SCORE = -30
 "Minimum score to count a match"
 
-STITCH_AUTO_FLOW_THRESH = 10
+STITCH_AUTO_FLOW_THRESH = 15
 "Distance in pixels where the auto stitch mode switches from nearby to direction-aligned"
 
 MAP_SCALE = 4
@@ -814,6 +854,8 @@ class Driver(object):
         self.shown = False
         self.map_walls = Map(resolution=RESOLUTION/MAP_SCALE)
         self.map_boundary = Map(resolution=RESOLUTION/MAP_SCALE)
+        self.map_visited = Map(resolution=RESOLUTION/MAP_SCALE)
+        self.boundary_coords = {'top': None, 'right': None, 'bottom': None, 'left': None}
 
     def register(self, ns=''):
         self.get_telemetry = rospy.ServiceProxy(ns + 'get_telemetry', clover.srv.GetTelemetry)
@@ -867,6 +909,10 @@ class Driver(object):
             self.state_taking_off()
         elif self.state == 'find_edge':
             self.state_find_edge()
+        elif self.state == 'fill_map':
+            self.state_fill_map()
+        elif self.state == 'going_home':
+            self.state_going_home()
 
     def state_take_off(self):
         telemetry = self.get_telemetry()
@@ -890,9 +936,10 @@ class Driver(object):
         hsv = cv2.cvtColor(img_below, cv2.COLOR_BGR2HSV)
         filter = self.filter_red.apply(hsv)
         filter_img = (filter * 255).astype(np.uint8)
+        filter_bool = filter > 0.5
 
         # Build map
-        self.build_map(img_below, filter > 0.5, corners)
+        self.build_map(img_below, filter_bool, corners)
 
         # Preview the map
         img_preview = self.map_boundary.to_preview_image()
@@ -917,12 +964,12 @@ class Driver(object):
         contours, hierarchy = cv2.findContours(self.map_boundary.to_threshold_image(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         hole, area = find_largest_hole(contours, hierarchy)
         if hole != -1 and area > 10000:
-            # Boundary complete!
-            cnt = contours[hole]
+            # Boundary complete! Fill in inside area and advance state
             img_boundary = np.zeros(self.map_boundary.matrix.shape, dtype=np.uint8)
             cv2.drawContours(img_boundary, contours, hole, color=255, thickness=cv2.FILLED)
-            cv2.imshow("Boundary", img_boundary)
-            print("CLOSED!")
+            print("Boundary closed!")
+            self.area_inside = img_boundary > 127
+            self.state = 'fill_map'
 
         # Draw edge points
         img_edges = np.zeros_like(img_below)
@@ -962,7 +1009,57 @@ class Driver(object):
         #cv2.imshow("Below", img_below)
         cv2.imshow("Parsed", img_edges)
         cv2.waitKey(3)
-        
+
+    def state_fill_map(self):
+        img_below, corners = self.process_image()
+        if img_below is None:
+            return
+
+        # Filter image for boundary
+        hsv = cv2.cvtColor(img_below, cv2.COLOR_BGR2HSV)
+        filter = self.filter_red.apply(hsv)
+        filter_bool = filter > 0.5
+
+        # Build map
+        self.build_map(img_below, filter_bool, corners)
+        pos, flow = self.snap_flow()
+        refined_pos = pos + self.offset
+
+        # Search map for closest unvisited point
+        mask = self.map_visited.matrix < self.map_visited.clip
+        mask &= self.area_inside
+
+        # If no unvisited points, advance state
+        if not mask.any():
+            self.state = 'going_home'
+            return
+
+        # Locate closest point
+        pos_idx = self.map_visited.index(refined_pos)
+        closest_idx = find_closest(mask, pos_idx)
+        closest = self.map_visited.centers(closest_idx)
+
+        # Direct drone to fly to target point
+        direction = closest - refined_pos
+        self.direct(direction * (-1, 1))
+
+        cv2.waitKey(3)
+
+    def state_going_home(self):
+        home = (self.boundary_coords['left'], self.boundary_coords['top'])
+        pos, flow = self.snap_flow()
+        refined_pos = pos + self.offset
+
+        # Are we there yet?
+        dist = np.linalg.norm(home - refined_pos)
+        if dist < 10:
+            # We're home.
+            rospy.signal_shutdown()
+            return
+
+        # Direct drone to fly to target point
+        direction = home - refined_pos
+        self.direct(direction * (-1, 1))
 
     def stop(self):
         self.running = False
@@ -1053,6 +1150,10 @@ class Driver(object):
 
         if error < STITCH_MAX_FLOW_ERR and score > STITCH_MIN_SCORE:
             self.offset += offset
+
+            # Calibrate offset based on boundary
+            self.calibrate_boundary(filter_boundary)
+            
             refined_pos = pos + self.offset
             self.reset_flow(pos, data)
 
@@ -1063,8 +1164,12 @@ class Driver(object):
             print('accrued offset:', self.offset)
             
             # Save the image!
-            start_idx, end_idx = self.map_walls.add(data['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
-            self.map_boundary.add(data_boundary['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+            start_idx, end_idx = self.map_walls.update(data['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+            self.map_boundary.update(data_boundary['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+
+            # Mark visited
+            visited_change = np.ma.array(np.ones(data['img_masked'].shape, dtype=np.int8), mask=data['img_masked'].mask)
+            self.map_visited.add(visited_change, refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
 
             # Preview the map
             img_preview = self.map_walls.to_preview_image()
@@ -1139,6 +1244,47 @@ class Driver(object):
         translation = translation_origins + center_offset
 
         return translation, score
+
+    def calibrate_boundary(self, img):
+        pos, flow = self.snap_flow()
+        refined_pos = pos + self.offset
+
+        sides = {'top':    {'coeff':  1, 'axis': 1},
+                 'right':  {'coeff': -1, 'axis': 0},
+                 'bottom': {'coeff': -1, 'axis': 1},
+                 'left':   {'coeff':  1, 'axis': 0}}
+
+        side_max = 'none'
+        num_max = 0
+
+        # Get edge position for each edge
+        for side, saved_pos in self.boundary_coords.items():
+            data = sides[side]
+            
+            dists = find_edge_dists(img, side)
+            data['num'] = len(dists)
+            dist = np.median(dists) if data['num'] > 0 else 0
+            data['pos'] = refined_pos[data['axis']] + data['coeff'] * dist
+
+            if data['num'] >= EDGE_POINTS_MIN:
+                # Enough points to mark an edge
+                if saved_pos is not None:
+                    # We have seen this edge before, adjust our offset
+                    print("Calibrating", side)
+                    error = data['pos'] - saved_pos
+                    #print(dist, pos, refined_pos, data['pos'], saved_pos, error)
+                    self.offset[data['axis']] -= error
+                if data['num'] > num_max:
+                    num_max = data['num']
+                    side_max = side
+
+        # Mark most prominent edge
+        print("Edge:", side_max)
+        if side_max != 'none':
+            # Edge found
+            if self.boundary_coords[side_max] is None:
+                # Have not previously seen this edge, mark it!
+                self.boundary_coords[side_max] = sides[side_max]['pos']
 
 
     ### Control the drone's flight path ###
