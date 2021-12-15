@@ -195,7 +195,7 @@ def calc_roi(corners):
     "Returns bounding box of an image's corners"
     min_pt = np.min(corners, axis=0)
     max_pt = np.max(corners, axis=0)
-    return min_pt, max_pt
+    return np.array([min_pt, max_pt])
 
 def project_below(img, R_euler, T_vec, K, K_inv):
     # Create homogeneous transformation from camera to ground
@@ -499,7 +499,7 @@ def estimate_translation_guess(d1, d2, guess):
         return translation, score
     except ValueError as e:
         # Computation error
-        print("Stitching failed: " + e)
+        print("Stitching failed:", e)
         return guess, -np.inf
 
 def estimate_translation_iterative(d1, d2, guess, reps, stop_dist=3):
@@ -510,7 +510,7 @@ def estimate_translation_iterative(d1, d2, guess, reps, stop_dist=3):
         guess = solution
     return solution, score
 
-def draw_stitched(img1, img2, translation):
+def draw_stitched(img1, img2, translation, valid=True):
     centers = np.array([translation, (0,0)])
     sizes = np.array([img1.shape, img2.shape])[:,1::-1]
 
@@ -522,7 +522,14 @@ def draw_stitched(img1, img2, translation):
 
     w,h = max_pt - min_pt
     img_combined = np.zeros((h, w, 3), dtype=np.uint8)
-    for img,pt0,pt1 in zip([img1, img2[...,::-1]], min_pts, max_pts):
+    
+    # Quick and dirty image recoloring
+    if valid:
+        img2_recolored = img2[...,::-1] # Converts yellow to teal
+    else:
+        img2_recolored = np.roll(img2, 1, axis=-1) # Converts yellow to purple
+
+    for img,pt0,pt1 in zip([img1, img2_recolored], min_pts, max_pts):
         mask = np.sum(img, axis=-1) > 0
         mask_broad = np.broadcast_to(mask[...,None], img.shape)
         x0, y0 = pt0 - min_pt
@@ -565,7 +572,8 @@ def find_closest(img, point):
     assert(img.dtype == bool)
     pts = np.moveaxis(np.indices(img.shape), 0, -1)[img]
     tree = KDTree(pts)
-    return np.array(tree.query(point))
+    dist, idx = tree.query(point)
+    return pts[idx]
 
 ### Contour Functions ###
 
@@ -603,7 +611,8 @@ class Map(object):
     def __init__(self, resolution,
         init_cols=100, init_rows=100, 
         init_shift_x=0., init_shift_y=0.,
-        val_range=10, val_clip=5):
+        val_range=10, val_clip=5,
+        latching=False):
 
         self.matrix = np.zeros((init_rows, init_cols), dtype=np.int8)
 
@@ -614,6 +623,7 @@ class Map(object):
         self.shift = np.array([init_shift_x, init_shift_y], dtype=float)
         self.range, self.clip = val_range, val_clip
         self.last_update_time = rospy.Time.now()
+        self.latching = latching
 
     def index(self, coords):
         "Return row,col indices from x,y coordinates."
@@ -636,6 +646,19 @@ class Map(object):
         center_offset = self.cell_dims * [0.5,0.5]
 
         return origin + center_offset
+
+    def surrounded_centers(self, kernel_size, roi=None):
+        kernel = np.ones(kernel_size, dtype=np.uint8)
+        if roi is None:
+            roi_idx = np.array([(0,0),self.matrix.shape])
+        else:
+            roi_idx = calc_roi(self.index(roi))
+        min_idx = roi_idx[0]
+        print("roi",roi)
+        print("roi_idx",roi_idx)
+        eroded = cv2.erode(self.to_threshold_image(roi), kernel)
+        points = min_idx + np.moveaxis(np.indices(eroded.shape), 0, -1)[eroded > 0]
+        return self.centers(points)
 
     def validate_entry(self, idx):
         "Check if the indices are within the matrix and expand if necessary, returning new indices."
@@ -703,6 +726,11 @@ class Map(object):
         start_idx, end_idx = self.validate_entry(np.array([topleft_idx, botright_idx]))
 
         map_range = self.matrix[start_idx[0]:end_idx[0], start_idx[1]:end_idx[1]]
+
+        if self.latching:
+            # Don't update cells that are already inside clip
+            img_change = np.ma.masked_where(np.abs(map_range) >= self.clip, img_change)
+
         map_range += img_change
         map_range.clip(-self.range, self.range, out=map_range)
 
@@ -740,10 +768,27 @@ class Map(object):
 
         return (np.stack([blue, green, red], axis=-1) * 255).astype(np.uint8)
 
-    def to_threshold_image(self, include_uncertain=False):
+    def to_threshold(self, roi=None, include_uncertain=False):
+        "Converts matrix to threshold boolean image"
+        threshold = 1 if include_uncertain else self.clip
+        if roi is not None:
+            roi_idx = calc_roi(self.index(roi))
+            matrix_view = self.matrix[roi_idx[0,0]:roi_idx[1,0], roi_idx[0,1]:roi_idx[1,1]]
+        else:
+            matrix_view = self.matrix
+        return matrix_view >= threshold
+
+    def to_threshold_certain(self, roi=None):
+        if roi is not None:
+            roi_idx = calc_roi(self.index(roi))
+            matrix_view = self.matrix[roi_idx[0,0]:roi_idx[1,0], roi_idx[0,1]:roi_idx[1,1]]
+        else:
+            matrix_view = self.matrix
+        return np.abs(matrix_view) >= self.clip
+
+    def to_threshold_image(self, roi=None, include_uncertain=False):
         "Converts matrix to threshold Greyscale image for contouring"
-        threshold = 0 if include_uncertain else self.clip
-        return ((self.matrix > threshold) * 255).astype(np.uint8)
+        return (self.to_threshold(roi, include_uncertain) * 255).astype(np.uint8)
 
     def to_occgrid(self):
         grid = OccupancyGrid()
@@ -818,7 +863,7 @@ STITCH_MODE_DEFAULT = 'auto'
 STITCH_MAX_DIST = 100
 "Maximum distance in pixels without a match before we need to start over"
 
-STITCH_MAX_FLOW_ERR = 50
+STITCH_MAX_FLOW_ERR = 25
 "Maximum distance in pixels between estimated flow and matched flow"
 
 STITCH_MIN_SCORE = -30
@@ -829,6 +874,14 @@ STITCH_AUTO_FLOW_THRESH = 15
 
 MAP_SCALE = 4
 "Scale down factor for the map"
+
+OFFSET_ALPHA = 0.5
+"Exponential smoothing factor for offset correction"
+
+MAP_COORD_SCALE = (-1/MAP_SCALE,1/MAP_SCALE)
+
+def exponential_smoothing(val_old, val_new, alpha):
+    return (1 - alpha) * val_old + (alpha) * val_new
 
 class Driver(object):
 
@@ -856,6 +909,7 @@ class Driver(object):
         self.map_boundary = Map(resolution=RESOLUTION/MAP_SCALE)
         self.map_visited = Map(resolution=RESOLUTION/MAP_SCALE)
         self.boundary_coords = {'top': None, 'right': None, 'bottom': None, 'left': None}
+        self.stitch_source = 'last'
 
     def register(self, ns=''):
         self.get_telemetry = rospy.ServiceProxy(ns + 'get_telemetry', clover.srv.GetTelemetry)
@@ -884,7 +938,7 @@ class Driver(object):
         self.caminfo_sub = rospy.Subscriber(ns + '/main_camera/camera_info', 
                                           CameraInfo, self.caminfo_callback)
 
-        self.map_pub = rospy.Publisher('/turtle/map', OccupancyGrid, queue_size=1)
+        self.map_pub = rospy.Publisher('/turtle/map', OccupancyGrid, queue_size=1, latch=True)
 
         rospy.on_shutdown(self.shutdown)
 
@@ -971,6 +1025,10 @@ class Driver(object):
             self.area_inside = img_boundary > 127
             self.state = 'fill_map'
 
+            # Lock map and proceed to stitch from map
+            self.map_walls.latching = True
+            #self.stitch_source = 'map' # DISABLED - not really operational (can't stitch properly to messy map)
+
         # Draw edge points
         img_edges = np.zeros_like(img_below)
         img_edges[tuple(xy_to_idx(edges_xy).astype(int).clip((0,0),(HEIGHT-1,WIDTH-1)).T)] = (0, 0, 255)
@@ -1026,7 +1084,7 @@ class Driver(object):
         refined_pos = pos + self.offset
 
         # Search map for closest unvisited point
-        mask = self.map_visited.matrix < self.map_visited.clip
+        mask = self.map_visited.matrix < self.map_visited.range
         mask &= self.area_inside
 
         # If no unvisited points, advance state
@@ -1035,13 +1093,20 @@ class Driver(object):
             return
 
         # Locate closest point
-        pos_idx = self.map_visited.index(refined_pos)
+        pos_idx = self.map_visited.index(refined_pos * MAP_COORD_SCALE)
         closest_idx = find_closest(mask, pos_idx)
-        closest = self.map_visited.centers(closest_idx)
+        closest = self.map_visited.centers(closest_idx) / MAP_COORD_SCALE
+        print(refined_pos, pos_idx, closest_idx, closest)
+        print("Navigating to", closest)
+
+        mask_img = mask.astype(np.uint8)[...,None] * np.array((255,255,255), dtype=np.uint8)
+        cv2.line(mask_img, to_cv(pos_idx), to_cv(closest_idx), (0,0,255), 2)
+        cv2.imshow("Unvisited", mask_img)
 
         # Direct drone to fly to target point
         direction = closest - refined_pos
         self.direct(direction * (-1, 1))
+        print("Direction:", direction)
 
         cv2.waitKey(3)
 
@@ -1054,7 +1119,7 @@ class Driver(object):
         dist = np.linalg.norm(home - refined_pos)
         if dist < 10:
             # We're home.
-            rospy.signal_shutdown()
+            self.shutdown()
             return
 
         # Direct drone to fly to target point
@@ -1121,6 +1186,13 @@ class Driver(object):
         # Apply filters to boundary image too
         data_boundary = initialize_data(None, filter_boundary, filter_view)
 
+        # If stitching based on map, find map reference image (saved in self.last_data)
+        if self.stitch_source == 'map':
+            flow_below = self.stitch_map(data, pos)
+            if flow_below is None:
+                # If failed, resort to regular flow stitching
+                self.stitch_source = 'last'
+
         # If not initialized or too far away, start over
         if flow_below is None or np.linalg.norm(flow_below) > STITCH_MAX_DIST:
             self.reset_flow(pos, data)
@@ -1144,12 +1216,13 @@ class Driver(object):
         else:
             raise ValueError(f"Unrecognized map stitching mode '{self.stitch_mode}'!")
 
-        img_stitched = draw_stitched(self.last_data['img_raw'], data['img_raw'], translation)
         error = np.linalg.norm(translation - flow_below)
         offset = translation - flow_below
 
+        valid = False
         if error < STITCH_MAX_FLOW_ERR and score > STITCH_MIN_SCORE:
-            self.offset += offset
+            valid = True
+            self.offset = exponential_smoothing(self.offset, self.offset + offset, OFFSET_ALPHA)
 
             # Calibrate offset based on boundary
             self.calibrate_boundary(filter_boundary)
@@ -1164,12 +1237,12 @@ class Driver(object):
             print('accrued offset:', self.offset)
             
             # Save the image!
-            start_idx, end_idx = self.map_walls.update(data['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
-            self.map_boundary.update(data_boundary['img_masked'], refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+            start_idx, end_idx = self.map_walls.update(data['img_masked'], refined_pos * MAP_COORD_SCALE)
+            self.map_boundary.update(data_boundary['img_masked'], refined_pos * MAP_COORD_SCALE)
 
             # Mark visited
             visited_change = np.ma.array(np.ones(data['img_masked'].shape, dtype=np.int8), mask=data['img_masked'].mask)
-            self.map_visited.add(visited_change, refined_pos * (-1/MAP_SCALE,1/MAP_SCALE))
+            self.map_visited.add(visited_change, refined_pos * MAP_COORD_SCALE)
 
             # Preview the map
             img_preview = self.map_walls.to_preview_image()
@@ -1179,6 +1252,8 @@ class Driver(object):
             # Publish the map
             grid = self.map_walls.to_occgrid()
             self.map_pub.publish(grid)
+
+        img_stitched = draw_stitched(self.last_data['img_raw'], data['img_raw'], translation, valid)
         
         if not self.shown:
             cv2.imshow("Stitched", img_stitched)
@@ -1244,6 +1319,51 @@ class Driver(object):
         translation = translation_origins + center_offset
 
         return translation, score
+
+    def stitch_map(self, data, pos):
+        # Search out in map only as far as we care about
+        min_pos = pos - STITCH_MAX_DIST
+        max_pos = pos + STITCH_MAX_DIST
+        roi = np.array([min_pos, max_pos]) * MAP_COORD_SCALE
+        size = np.array(data['img'].shape[:2][::-1])
+        print("roi,size", roi, size)
+
+        # Search for centers of fully explored spaces
+        valid_centers = self.map_visited.surrounded_centers(size, roi)
+        if len(valid_centers) == 0:
+            return None
+
+        # Find closest point
+        centers_tree = KDTree(valid_centers)
+        dist, idx = centers_tree.query(pos * MAP_COORD_SCALE)
+        pos_map = valid_centers[idx]
+        print("pos", pos)
+        print("pos_map scaled back", pos_map / MAP_COORD_SCALE)
+
+        # Create region of interest for reference image
+        min_pos_map = pos_map - np.round(size / 2).astype(int)
+        max_pos_map = min_pos_map + size
+        roi_map = np.array([min_pos_map, max_pos_map])
+        print("roi_map scaled back", roi_map / MAP_COORD_SCALE)
+        
+        # Create reference image and flow
+        map_img = self.map_walls.to_threshold_image(roi_map, include_uncertain=False)[...,None] * np.array((0,1,1),dtype=np.uint8)
+        map_filter = self.map_walls.to_threshold(roi_map, include_uncertain=False)
+        map_filter_view = self.map_walls.to_threshold_certain(roi_map)
+        flow_below = pos - (pos_map / MAP_COORD_SCALE)
+
+        # Initialize data for reference image
+        map_img_upscaled = cv2.resize(map_img, data['img_raw'].shape[:2])
+        img_masked_scaled = np.ma.array(map_filter, mask=~map_filter_view, copy=False)
+        self.last_data = {'img_raw': map_img_upscaled, 
+                          'img_masked': img_masked_scaled, 
+                          'img': img_masked_scaled.data, 
+                          'prepared': False}
+
+        cv2.imshow("Map View", map_img_upscaled)
+
+        return flow_below
+
 
     def calibrate_boundary(self, img):
         pos, flow = self.snap_flow()
