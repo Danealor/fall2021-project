@@ -10,14 +10,16 @@ Team Members:
 
 In this project we combined the use of the COEX Clover quadcopter from `https://coex.tech/clover`, the Turtlebot3 burger bot, RVIZ, and Gazebo to build a maze solver system. In Gazebo simulation, the quadcopter and burger bot spawn within a maze world. The user is then able to run a single control file to command the quadcopter to fly about the maze and begin generating a map file. Using the map file and RVIZ SLAM server, the user is able to locate the burger bot on the map and provide it with a move goal to quickly and efficiently solve the maze. This package offers the user the ability to randomize the maze and attempt different solution configurations. 
 
+![Finished Map](Images/map_finished.png)
+
 ### Contributions
 
 This project offers a number of unique design features:
 
 - Dual robot Gazebo simulation 
 - Custom image stitching algorithm for map building (scikit-learn)
-- RVIZ SLAM server usage with quadcopter serving as map server vice static image
-- Separation of navigation and map building between two different robots  
+- RVIZ SLAM server usage with quadcopter serving as the map server
+- Separation of navigation and map building between two different robots with different perspectives, collaborating together  
 
 ---
 
@@ -164,6 +166,8 @@ To test simple flight: *(skip if you didn't install QGroundControl)*
 
   If you would like to randomize the maze after that, run `python3 randomizer.py`
 
+![Editing in Excel](Images/excel_map.png)
+
 3) Save the most up to date `custom_world_coords.xlsx` as a text CSV file (`custom_world_coords.csv`).
 
 4) Run the following command to generate the world:
@@ -207,6 +211,8 @@ A few arguments to note for this launch file are:
 
 Check Gazebo that you can see the yellow maze within the red bounding box, as well as a turtlebot and drone sitting safely on the ground.
 
+![World with both robots](Images/world_with_robots.png)
+
 **Running the drone mission:**
 
 In order to send the drone off on its merry way, simply run:
@@ -222,23 +228,51 @@ A couple arguments can be specified for this node:
 The `drone_control` node is programmed as a state machine will autonomously advance through the following states/phases during its mission to map the maze:
 1. **`take_off`:** Start up the drone and take off at 0.5m/s to a height of 1.5m.
 2. **`taking_off`:** Wait until the drone is stable at 1.5m high.
+
+![Taking off](Images/take_off.png)
+
 3. **`find_edge`:** Here is where the bulk of the work happens, and where several OpenCV image windows will pop open. In short: 
    1. The drone will attempt to find the red boundary on the ground and proceed to follow it clockwise at 0.25m/s.
    2. The drone will stitch together imagery from beneath it to build up a world view of both the maze and the boundary its following, using the movement of the maze as well as the straight edge of the boundary as a guide for self-positioning.
    3. Once the drone has completed the boundary into a closed path, which could take one or two passes, the drone will take a snapshot of the finished boundary and mask off all locations outside of it, then proceed to the next state/phase.
+
+![State: find_edge](Images/find_edge.png)
+
 4. **`fill_map`:** The drone will continue mapping out the maze below it in a similar fashion, but this time fly towards unvisited locations inside the maze, going for the nearest locations first. Once everything inside the boundary has been mapped out, the drone advances to its final state.
+
+![State: fill_map](Images/fill_map.png)
+
 5. **`going_home`:** The drone flies to a corner of the boundary and lands. Flight and mapping will cease, but will stay running to allow the map to be captured on the `~/turtle/map` topic (see below for saving the map).
 
 The terminal will be outputting the drone's current state, as well as some debug information from the image stitching algorithms.
 
 The functions for the OpenCV imagery windows are described by the window title as follows:
-- **`Below`:** The image from the camera, warped using a homography transformation to represent physical space on the ground plane (100px = 1m).
+- **`Below`:** The image from the camera, warped using a homography transformation to represent physical space on the ground plane (100px = 1m). Currently not actually shown in a window unless no boundary is found.
+
 - **`Stitched`:** The result of the image stitching algorithm, depicted using the yellow wall remembered from the last good frame overlayed by the walls from the current frame, which are light blue if valid or purple if invalid. Some statistics are printed as well, with `score` representing goodness of fit (higher is better) and `error` representing distance from estimated flow (lower is better). `pos` shows the current estimated position.
+
+![Image: Stitched](Images/stitched.png)
+
 - **`Map`:** The result of the many frames taken by the drone stitched together. White represents a wall, blue represents open space, and black represents unknown. It takes a few frames to solidify a known wall or open space, or to change this marking back to unkown.
+
+![Image: Map](Images/map.png)
+
 - **`Boundary Map`:** Same as `Map`, except for the red boundary on the ground. The `find_edge` state will finish once this boundary is closed.
+
+![Image: Boundary Map](Images/boundary_map.png)
+
 - **`Rotated`:** Might be shown when the drone switches to the `aligned_dir` backup stitching mode (or when it is specified in the arguments). Shows the `Below` image rotated to align with direction of travel (on the x-axis).
+
+![Image: Rotated](Images/rotated.png)
+
 - **`Parsed`:** The edges of the red boundary, parsed separately using a Canny filter. Specific to the `find_edge` state, used to follow the edge. The yellow line points towards the edge, the green line points towards the intended direction of travel.
+
+![Image: Parsed](Images/parsed.png)
+
 - **`Unvisited`:** Shown during the `fill_map` state, shows which areas of the map are yet unvisited. A red line points towards the nearest point the drone will travel to.
+
+![Image: Unvisited](Images/unvisited.png)
+
 - **`Map View`:** Currently will not be shown, since stitching from the map is disabled in code (see Future Work for more information). Represents a nearby portion of the map found to use for stitching.
 
 **Moving the turtlebot:**
@@ -252,6 +286,8 @@ Once the map has been completed:
 3. Wait for the turtlebot to localize itself and navigate around the obstacles found by the drone to reach its destination.
 	- This may take some time, due to error in translation of the map between reference frames and uncertainty in the turtlebot readings.
 
+![RViz](Images/rviz.png)
+
 **Saving the map:**
 
 Since we may not want to fly the drone mission every time, we can save the map with the following command:
@@ -264,7 +300,7 @@ The map could then be published again in a future session with the following com
 rosrun map_server map_server ~/Documents/eagle_eye/map.yaml _frame_id:=/turtle/map
 ```
 
-### Test physical drone
+### Test the physical drone
 
 While we have not tested the autonomous drone control loop on a physical drone, we did manage to establish remote connection to give commands over the network through the Raspberry Pi and receive telemetry.
 
@@ -284,11 +320,23 @@ rosservice call /navigate 0.0 0.0 1.0 0.0 0.0 0.5 body true
 rosservice call /land
 ```
 
-
 ---
 
 ## Description of Operation
-FINISHME
+
+As described in the "Running the drone mission" section, the `drone_control.py` node is implemented as a state machine, advancing through its states like phases in its mission. While the states themselves have been described in that section, here we will outline the general pipeline an image taken from the drone camera takes within each stage.
+
+1. The image is captured from the `/main_camera/image_raw` topic, along with current telemetry for the drone's position, rotation and velocity.
+	- This information is saved until the next cycle in the main loop.
+2. Within the main loop, the image is undistorted from any lens effects using a "plumb-bob model" described in the `/main_camera/camera_info` metadata topic.
+3. The image is projected from the camera to the ground plane using a homography transformation generated from the drone's position and rotation. This image is then recentered to create the `Below` image, where each pixel represents 1cm and the center of the image represents the position directly below the drone, regardless of where the drone is pointing.
+4. The image is filtered for yellow walls and red boundaries using a probabilistic model (p-value on preprogrammed distributions) on an HSV version of the image.
+5. Stitching data is initialized for the image, where for each row and each column, a list is created for the positions of the positive and negative edges of the walls.
+6. An initial estimate for the drone translation (flow) since the last image is found using the translation telemetry acquired with each image. This is used to create an initial guess for the amount the image has shifted since the last good image taken.
+7. The new image is matched with the last image, either by alternating between matching rows and columns iteratively starting with the guess position (`stitch_mode='search_nearby'`) or by rotating the image and finding the translation only in the direction of movement implied by the estimated flow (`stitch_mode='aligned_dir'`, used when the flow is large enough).
+8. This match is used to update a running tally of the offset from the "real" position to the position given by the drone's translation telemetry, which drifts over time since it is based on its own optical flow algorithm.
+9. The resulting image and position is then overlayed onto the map in the correct location, adding some certainty to each pixel as to whether it is a wall or free space.
+10. The image and position is saved to be used as the reference for the next frame, allowing the drone to iteratively track its movement based on the position of the maze below while simultaneously stitching together the map (our own sort of SLAM, in a way!)
 
 ---
 
@@ -331,15 +379,18 @@ FINISHME
 ### Learned
 - Overall better understanding of ROS Topics and Services
 - Map generation via Excel and CSV file use
-- Use of groups in .launch files to differentiate between robots
-- Frame generation using tf2_tools from wiki.ros.org/tf2_tools for troubleshooting purposes
-- 
-- FINISHME 
+- Use of groups in `.launch` files to differentiate between robots
+- Modifying `.world` files to create custom worlds
+- Frame generation using tf2_tools from wiki.ros.org/tf2_tools for troubleshooting purposes, as well as how to manage and reassign coordinate frames themselves
+- How to use a variety of image processing tools, including: Camera Calibration, Homography, Image Stitching, Filtering and Masking
+- How to collaborate and coordinate between different parts of a system, both with inter-robot communication and as partners working on different aspects of the project
 
 ### Challenges
 - Image processing is far more laborious than initially expected - so much data to sift through and so volatile to the slightest of changes!
-- Coordinate transformations, from xy-coordinates (+x,+y) to matrix indices (-y,+x) to cv2 positions (+x,-y) to all the different transformations from the camera reference frame to the ground reference frame
-- FINISHME
+- A multitide of coordinate transformations to confuse the soul, from xy-coordinates (+x,+y) to matrix indices (-y,+x) to cv2 positions (+x,-y) to all the different transformations from the camera reference frame to the ground reference frame
+- The images acquired by the drone in simulation are too "simple" to be used in traditional image stitching algorithms; there are not enough unique features to use as keypoints, thus we had to create our own custom stitching algorithm based on the walls of the maze.
+  - We imagine we would have far different problems when translating to a physical realization of this project.
+- When doing localization using image stitching on the last image seen, the given position is very sensitive to slight errors in each frame and will drift over time, just like the drone's own telemetry. Our own band-aid for this problem was to use the boundaries as calibration for our coordinates, but another solution is hypothesized in "Future Work".
 
 ---
 
@@ -349,15 +400,17 @@ There are a number of ways to build upon the work we’ve done so far. A few ide
 
 - Adding a second turtlebot to “seek” the initial turtlebot which would would both utilize the map generated by the quadcopter, but for different purposes
 - Adding additional code for the quadcopter to be able to locate the turtlebot and provide better maze solving instructions 
-- Implementing a more complex image stitching algorithm that does not require a boundary or walls to be of a certain color
+  - This should only require filtering for a different color (dark gray), or at most running a pattern-matching module, and then publishing the position to the `/turtle/initialpose` topic.
+- Implementing a more complex and robust image stitching algorithm that does not require a boundary or walls to be of a certain color
 - Create a more robust navigation server than RVIZ SLAM to increase speed and efficiency of the turtlebot’s solution path
-
-web server
-
-- Find turtlebot in maze and send to TOPIC_NAME on the fly
-- Execute image stitching based on the known map, which should result in a much more stable self-positioning since our position estimate is not tied to the floating position of the last frame, but rather the static "known-good" position of the map itself. NOTE: This is already implemented, but disabled because our current stitching algorithms are not capable of matching imagery to the rather "messy" map output. You can test this by uncommenting line XXX and waiting for the border to close.
-- Allow for the disabling of preview imagery, which is likely significantly slowing down the computation loop (or perhaps only show it occasionaly, on a separate timer). This, along with running headless, could allow the drone to scan the maze faster.
-- Run on the physical drone! Actual image stitching
+- Execute image stitching based on the known map instead of the last frame
+  - This should result in a much more stable self-positioning since our position estimate is not tied to the floating position of the last frame, but rather the static "known-good" position of the map itself.
+  - **NOTE:** This is already implemented in the code, but has been disabled because our current stitching algorithms are not capable of matching imagery to the rather "messy" map output. You can test this by uncommenting line 1030 in `code/eagle_eye/scripts/drone_control.py` and waiting for the border to close.
+- Allow for the disabling of preview imagery, which is likely significantly slowing down the computation loop (or perhaps only show it occasionaly, on a separate timer).
+  - This, along with running headless, could allow the drone to scan the maze faster.
+- Run on the physical drone!
+  - This might require a more robust image stitching algorithm, which could be either more difficult or easier depending on how easy it would be to find matching keypoints in real images.
+- Launch a web server in parallel in order to preview output imagery in a more organized fashion.
 
 ---
 
@@ -365,12 +418,14 @@ web server
 
 - Programming Robots with ROS by Morgan Quigley, Brian Gerkey, and William D. Smart
     - Ch 9&10: SLAM Server - We made heavy use of the in-built turtlebot navigation server in order to locomote our turtlebot, as well as understanding the map that it has built so that we can build our own on-the-fly (literally!).
-    - Ch2: roslaunch: We used the book’s resources as well as the online ROS documentation and forums in order to modify our `.world`and `.launch` files
-        - https://answers.ros.org/question/295383/controlling-multiple-drones-using-ros/
+    - Ch2: roslaunch: We used the book’s resources as well as the online ROS documentation and forums in order to modify our `.world` and `.launch` files
+        - https://answers.ros.org/question/295383/controlling-multiple-drones-using-ros/ for using named groups in our `.launch` file
     - Existing turtlebot code such as `multi_turtlebot3.launch` used as reference for writing our own configuration files
 - OpenCV2 documentation for Image Stitching and Computer Vision (camera calibration):
-- https://docs.opencv.org/4.x/d1/d46/group__stitching.html
-- https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
+  - https://docs.opencv.org/4.x/d1/d46/group__stitching.html
+  - https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html
+- COEX Clover installation and simulation documentation
+  - https://clover.coex.tech/en/
 
 
 
