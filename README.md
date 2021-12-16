@@ -180,6 +180,8 @@ What this does is utilize the saved CSV file to create a matching .world file in
 
 6) Provided there were no errors, the Gazebo world should spawn blocks of a certain color to match the coordinates provided in the `custom_world.coords.xlsx`. THIS IS NOT THE FINAL WORLD BUILD, THE PURPOSE OF THIS IS TO VERIFY A TURTLEBOT SPAWNS WITH THE MAZE YOU DESIGNED.
 
+![Empty Maze World](Images/maze_world.png)
+
 7) OPTIONAL: To change the color of the blocks, open the `create_world.py` script and update line 157 with a color name (Ex: Gray).
 
 8) After successful maze and turtlebot generation, please continue to the next section.
